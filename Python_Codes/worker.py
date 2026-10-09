@@ -1,0 +1,88 @@
+import os
+import time
+import traceback
+from supabase import create_client, Client
+from dotenv import load_dotenv
+from pipeline import run_pipeline
+
+load_dotenv()
+
+def get_supabase_client() -> Client:
+    # Use the service role key to bypass RLS for the background worker
+    url: str = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
+    key: str = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+    
+    if not url or not key:
+        raise ValueError("Supabase URL and Key must be set in .env")
+        
+    return create_client(url, key)
+
+def update_job_status(supabase: Client, job_id: str, status: str, stage: str = None, error: str = None, progress: int = None):
+    update_data = {"status": status}
+    if stage:
+        update_data["stage"] = stage
+    if error is not None:
+        update_data["error"] = error
+    if progress is not None:
+        update_data["progress"] = progress
+        
+    try:
+        supabase.table("lectures_processing").update(update_data).eq("id", job_id).execute()
+        print(f"[{job_id}] Status updated to '{status}' (Stage: {stage})")
+    except Exception as e:
+        print(f"Failed to update job status for {job_id}: {e}")
+
+def process_jobs():
+    supabase = get_supabase_client()
+    print("🚀 Worker started. Listening for new jobs...")
+    
+    while True:
+        try:
+            # Find a pending job
+            response = supabase.table("lectures_processing").select("*").eq("status", "pending").order("created_at").limit(1).execute()
+            jobs = response.data
+            
+            if not jobs:
+                time.sleep(5)  # Wait for 5 seconds before checking again
+                continue
+                
+            job = jobs[0]
+            job_id = job["id"]
+            lecture_id = job["lecture_id"]
+            
+            print(f"\n" + "="*50)
+            print(f"📥 Picked up new job: {job_id} for lecture: {lecture_id}")
+            
+            # Extract courseId and lectureFolder from lecture_id
+            # Assuming format: courseId-llectureNumber (e.g. ic112-l1)
+            if "-l" not in lecture_id:
+                raise ValueError(f"Invalid lecture_id format: {lecture_id}")
+                
+            parts = lecture_id.split("-l")
+            course_id = parts[0]
+            lecture_number = parts[1]
+            
+            task = [course_id, lecture_number]
+            
+            update_job_status(supabase, job_id, "processing", stage="initializing", progress=2)
+            
+            # Progress callback for the pipeline
+            def progress_callback(progress, stage):
+                update_job_status(supabase, job_id, "processing", stage=stage, progress=progress)
+            
+            # Run the existing pipeline
+            # The pipeline might throw exceptions, we catch them to fail the job
+            run_pipeline(task, progress_callback=progress_callback)
+            
+            update_job_status(supabase, job_id, "completed", stage="done", progress=100)
+            print(f"✅ Job {job_id} completed successfully!")
+            
+        except Exception as e:
+            print(f"❌ Error processing job: {e}")
+            traceback.print_exc()
+            if 'job_id' in locals():
+                update_job_status(supabase, job_id, "failed", error=str(e))
+            time.sleep(5)  # Wait a bit before retrying another job
+
+if __name__ == "__main__":
+    process_jobs()
