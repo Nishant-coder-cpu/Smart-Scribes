@@ -1,4 +1,5 @@
-import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
+import { getLLM } from "./llm";
+import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
@@ -35,7 +36,7 @@ const createGoogleSearchTool = (apiKey: string, searchEngineId: string) => {
 
 // Simple agent that can use tools
 async function runWithTools(
-  llm: ChatGoogleGenerativeAI,
+  llm: BaseChatModel,
   tools: DynamicStructuredTool[],
   query: string
 ): Promise<string> {
@@ -103,17 +104,8 @@ export async function generateResponse(
   lectureContent?: string
 ): Promise<string> {
   try {
-    // Validate API key
-    if (!geminiApiKey) {
-      throw new Error("Gemini API key is required");
-    }
-
-    // Initialize Gemini LLM
-    const llm = new ChatGoogleGenerativeAI({
-      apiKey: geminiApiKey,
-      temperature: 0.7,
-      model: "gemini-2.5-pro", // Example model name, replace with the correct one if needed
-    });
+    // Initialize LLM (respects DEFAULT_LLM_PROVIDER env var, e.g. gemini)
+    const llm = getLLM(undefined, 0.7) as any;
 
     // Create tools if search credentials are provided
     const tools = (googleSearchApiKey && searchEngineId) 
@@ -195,11 +187,7 @@ export async function simpleChat(
       throw new Error("Gemini API key is required");
     }
 
-    const llm = new ChatGoogleGenerativeAI({
-      apiKey: geminiApiKey,
-      temperature: 0.7,
-      model: "chat-bison", // Example model name, replace with the correct one if needed
-    });
+    const llm = getLLM('aws', 0.7) as any;
 
     const prompt = ChatPromptTemplate.fromTemplate(
       `You are a helpful AI learning assistant for college courses. You help students with:

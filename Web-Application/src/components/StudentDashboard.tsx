@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { FileQuestion, X, MessageCircle, HelpCircle } from 'lucide-react';
+import { FileQuestion, X, MessageCircle, HelpCircle, Sparkles } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 import { LectureNav } from './LectureNav';
 import { LectureContent } from './LectureContent';
@@ -208,6 +208,23 @@ export function StudentDashboard({ onLogout }: StudentDashboardProps) {
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    onClick={() => setChatOpen(!chatOpen)}
+                    variant={chatOpen ? "default" : "outline"}
+                    className="gap-2 text-sm"
+                  >
+                    <Sparkles className="w-4 h-4 text-purple-600" />
+                    <span className="hidden md:inline">{chatOpen ? 'Close AI Tutor' : 'AI Tutor'}</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>{chatOpen ? 'Hide AI Assistant' : 'Open AI Assistant'}</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
         </div>
 
@@ -241,10 +258,15 @@ export function StudentDashboard({ onLogout }: StudentDashboardProps) {
             {currentMode === 'projects' && <ProjectSection />}
           </div>
 
-          {/* Chat panel (only on desktop) */}
-          <div className="hidden lg:block w-[350px] border-l border-gray-200">
-            <ChatPanel lectureContent={getCurrentContent()?.content as unknown} />
-          </div>
+          {/* Chat panel (optional / toggleable) */}
+          {chatOpen && (
+            <div className="hidden lg:block w-[350px] border-l border-slate-200 animate-in slide-in-from-right duration-200">
+              <ChatPanel
+                lectureContent={getCurrentContent()?.content as unknown}
+                onClose={() => setChatOpen(false)}
+              />
+            </div>
+          )}
         </div>
       </div>
 
@@ -268,7 +290,7 @@ export function StudentDashboard({ onLogout }: StudentDashboardProps) {
             <X className="w-5 h-5" />
           </Button>
         </div>
-        <ChatPanel />
+        <ChatPanel onClose={() => setChatOpen(false)} />
       </div>
 
       {/* QnA Dialog */}

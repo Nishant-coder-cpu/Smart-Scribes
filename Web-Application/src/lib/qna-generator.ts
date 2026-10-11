@@ -1,4 +1,4 @@
-import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
+import { getLLM } from "./llm";
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
@@ -35,22 +35,14 @@ const createGoogleSearchTool = (apiKey: string, searchEngineId: string) => {
 // Function to recommend topics based on lecture content
 export async function recommendTopics(
   lectureContent: string,
-  geminiApiKey: string
+  geminiApiKey?: string
 ): Promise<string[]> {
   try {
-    if (!geminiApiKey) {
-      throw new Error("Gemini API key is required");
-    }
-
     if (!lectureContent || lectureContent.trim().length === 0) {
       throw new Error("Lecture content is required");
     }
 
-    const llm = new ChatGoogleGenerativeAI({
-      apiKey: geminiApiKey,
-      temperature: 0.7,
-      model: "gemini-2.0-flash-exp",
-    });
+    const llm = getLLM(undefined, 0.7) as any;
 
     const topicPrompt = ChatPromptTemplate.fromTemplate(
       `You are an expert educational content analyzer specializing in identifying key topics for assessment.
@@ -110,28 +102,19 @@ JSON Response:`
   }
 }
 
-// Function to generate questions and answers using AI with search
 export async function generateQnA(
   topic: string,
   questionFormat: string,
-  geminiApiKey: string,
+  geminiApiKey?: string,
   googleSearchApiKey?: string,
   searchEngineId?: string
 ): Promise<any[]> {
   try {
-    if (!geminiApiKey) {
-      throw new Error("Gemini API key is required");
-    }
-
     if (!topic || topic.trim().length === 0) {
       throw new Error("Topic is required");
     }
 
-    const llm = new ChatGoogleGenerativeAI({
-      apiKey: geminiApiKey,
-      temperature: 0.7,
-      model: "gemini-2.0-flash-exp",
-    });
+    const llm = getLLM(undefined, 0.7) as any;
 
     // Define format-specific instructions
     let formatInstructions = "";

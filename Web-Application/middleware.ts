@@ -56,10 +56,13 @@ export async function middleware(request: NextRequest) {
 
   const { data: { user } } = await supabase.auth.getUser()
 
-  // Protect API routes
-  if (request.nextUrl.pathname.startsWith('/api/') && !request.nextUrl.pathname.startsWith('/api/auth')) {
+  // Protect server-only sensitive API routes while allowing client app routes (chat, qna, courses)
+  const publicApiPrefixes = ['/api/auth', '/api/chat', '/api/qna', '/api/courses', '/api/doubts', '/api/lectures'];
+  const isPublicApi = publicApiPrefixes.some((prefix) => request.nextUrl.pathname.startsWith(prefix));
+
+  if (request.nextUrl.pathname.startsWith('/api/') && !isPublicApi) {
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
   }
 

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 Smart Scribes - Ultimate Manim Animation System
-Combines multi-agent architecture with detailed prompt engineering
-For iHub Hackathon 2025
+Combines multi-agent architecture with detailed prompt engineering.
+
+Supports AWS Bedrock (Claude) and Google Gemini via llm_provider.
 """
 
 import os
@@ -14,32 +15,22 @@ import shutil
 import re
 from pathlib import Path
 from dotenv import load_dotenv
-import google.generativeai as genai
 import traceback
+
+from llm_provider import generate_fast, generate_pro, safe_json
 
 load_dotenv()
 
 class SmartScribesUltimateAgent:
     """
     Ultimate Production System
-    - Flash for fast analysis
-    - Pro for detailed prompt creation
-    - Pro for high-quality code generation
+    - Fast model for quick analysis
+    - Pro model for detailed prompt creation and high-quality code generation
     - 60-second professional animations
     """
 
     def __init__(self):
-        """Initialize with dual models and detailed prompting"""
-        self.api_key1 = os.getenv('GEMINI_API_KEY')
-        if not self.api_key1:
-            raise ValueError("GEMINI_API_KEY not found in .env file")
-
-        genai.configure(api_key=self.api_key1)
-        
-        # Dual model setup
-        self.flash_model = genai.GenerativeModel('gemini-2.5-flash')  # Fast analysis
-        self.pro_model = genai.GenerativeModel('gemini-2.5-pro')    # Quality code
-        
+        """Initialize animation agent."""
         self.safety_settings = [
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"},
             {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_ONLY_HIGH"},
@@ -52,22 +43,22 @@ class SmartScribesUltimateAgent:
         self.output_dir.mkdir(exist_ok=True)
 
         print("✅ Smart Scribes Ultimate Agent initialized!")
-        print("   🚀 Analysis: Gemini Flash")
-        print("   🧠 Prompt Creation: Gemini Pro")
-        print("   🎨 Code Generation: Gemini Pro")
+        print("   🚀 Analysis: Fast model")
+        print("   🧠 Prompt Creation: Pro model")
+        print("   🎨 Code Generation: Pro model")
         print(f"   📁 Output: {self.output_dir}")
 
     def analyze_lecture_content(self, file_path):
-        """Fast analysis with Flash model"""
+        """Fast analysis with Flash/Haiku model"""
         print(f"\n🧠 Analyzing: {file_path}")
 
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
         print(f"   Size: {len(content)} chars")
-        print("   🚀 Using Flash...")
+        print("   🚀 Using fast model...")
 
-        analysis = self._try_gemini_analysis(content)
+        analysis = self._try_llm_analysis(content)
 
         if analysis:
             print("   ✅ Analysis successful!")
@@ -79,8 +70,8 @@ class SmartScribesUltimateAgent:
 
         return analysis
 
-    def _try_gemini_analysis(self, content):
-        """Fast analysis"""
+    def _try_llm_analysis(self, content):
+        """Fast analysis using the configured LLM provider."""
         safe_content = content
 
         prompt = f"""get topics from the content provided below
@@ -94,29 +85,7 @@ ONLY JSON."""
 
         for attempt in range(2):
             try:
-                response = self.flash_model.generate_content(
-                    prompt,
-                    generation_config=genai.GenerationConfig(
-                        temperature=0.3,
-                        max_output_tokens=1000
-                    ),
-                    safety_settings=self.safety_settings
-                )
-
-                if not response.candidates:
-                    continue
-
-                candidate = response.candidates[0]
-                if candidate.finish_reason in [2, 3]:
-                    continue
-
-                if hasattr(response, 'text'):
-                    text = response.text
-                elif candidate.content and candidate.content.parts:
-                    text = candidate.content.parts[0].text
-                else:
-                    continue
-
+                text = generate_fast(prompt, temperature=0.3, max_tokens=1000)
                 json_text = self._extract_json(text)
                 data = json.loads(json_text)
 
@@ -186,10 +155,10 @@ ONLY JSON."""
 
     def create_detailed_animation_prompt(self, topic):
         """
-        AGENT 1: Create super detailed animation prompt using Pro
-        This generates a rich, detailed description of what to animate
+        AGENT 1: Create super detailed animation prompt using Pro model.
+        This generates a rich, detailed description of what to animate.
         """
-        print(f"   🧠 Creating detailed prompt with Pro...")
+        print(f"   🧠 Creating detailed prompt with Pro model...")
         
         prompt = f"""You are an expert animation director creating a detailed animation.
 
@@ -211,17 +180,8 @@ Provide specific details like:
 Return detailed step-by-step description, be very specific!"""
 
         try:
-            response = self.pro_model.generate_content(
-                prompt,
-                generation_config=genai.GenerationConfig(
-                    temperature=0.7,  # Higher for creativity
-                    
-                ),
-                safety_settings=self.safety_settings
-            )
-
-            if hasattr(response, 'text') and response.text:
-                detailed_prompt = response.text
+            detailed_prompt = generate_pro(prompt, temperature=0.7)
+            if detailed_prompt:
                 print(detailed_prompt)
                 print(f"   ✅ Created detailed prompt ({len(detailed_prompt)} chars)")
                 return detailed_prompt
@@ -249,11 +209,10 @@ Use smooth transitions, clear colors, educational style."""
 
     def generate_manim_code(self, topic, detailed_prompt):
         """
-        AGENT 2: Generate high-quality Manim code from detailed prompt
+        AGENT 2: Generate high-quality Manim code from detailed prompt.
         """
-        print(f"   🎨 Generating code with Pro...")
+        print(f"   🎨 Generating code with Pro model...")
         
-        # Super detailed code generation prompt
         code_prompt = f"""You are an expert Manim Python developer creating a professional educational animation.
 
 ANIMATION TOPIC: {topic}
@@ -276,26 +235,18 @@ DETAILED ANIMATION PLAN:
 Return ONLY complete Python code. No markdown. No explanations. Just code."""
 
         for attempt in range(3):
-            
                 if attempt > 0:
                     import time
                     time.sleep(2)
                     print(f"      ⏳ Retry {attempt}/3...")
                 
-                response = self.pro_model.generate_content(
-                    code_prompt,
-                    generation_config=genai.GenerationConfig(
-                        temperature=0.3,
-                        
-                    ),
-                    safety_settings=self.safety_settings
-                )
+                try:
+                    code = generate_pro(code_prompt, temperature=0.3)
+                except Exception as e:
+                    print(f"      ⚠️ Generation failed: {str(e)[:60]}")
+                    continue
                 
-                if hasattr(response, 'text') and response.text:
-                    code = response.text
-                elif response.candidates and response.candidates[0].content.parts:
-                    code = "".join(part.text for part in response.candidates[0].content.parts if hasattr(part, "text"))
-                else:
+                if not code:
                     continue
                 
                 # Clean code
@@ -311,34 +262,13 @@ Return ONLY complete Python code. No markdown. No explanations. Just code."""
                 code = code.replace('Main Topic', safe_topic)
                 code = code.replace('Title Here', safe_topic)
                 
-                # Validate
-        return code
+                return code
+        return None
     
-        
-    def get_manim_correction_suggestions(code: str, api_key: str) -> str:
+    def get_manim_correction_suggestions(self, code: str) -> str:
         """
-        Use Gemini to analyze Manim code and suggest corrections.
-        
-        Gemini will:
-        - Act as a Manim and python expert.
-        - Analyze the code for errors, missing constructs, and style issues.
-        - Avoid MathTex/Tex.
-        - Check for overlapping or abrupt animations.
-        - Return a textual description of what can be modified and corrected.
-        
-        Args:
-            code: The Manim code script to analyze.
-            api_key: Your Google AI API key.
-
-        Returns:
-            str: A string containing suggestions for improvement.
+        Use LLM to analyze Manim code and suggest corrections.
         """
-        
-        # Configure Gemini
-        # You can also configure this once globally
-        model = genai.GenerativeModel("gemini-2.5-flash")
-
-        # LLM prompt for analysis
         prompt = f"""
         You are an expert Manim animation and python developer.
         A user has provided the following Manim script, which may be broken or incomplete.
@@ -365,36 +295,16 @@ Return ONLY complete Python code. No markdown. No explanations. Just code."""
         """
 
         try:
-            # Generate with Gemini
-            response = model.generate_content(prompt)
-            suggestions = response.text.strip()
-            return suggestions
+            suggestions = generate_fast(prompt, temperature=0.3)
+            return suggestions.strip()
         except Exception as e:
             print(f"Error generating suggestions: {e}")
             return f"Error: Could not get suggestions. {e}"
 
-    def apply_manim_corrections(original_code: str, suggestions: str, api_key: str) -> str:
+    def apply_manim_corrections(self, original_code: str, suggestions: str) -> str:
         """
-        Use Gemini to apply suggested corrections to Manim code.
-        
-        Gemini will:
-        - Receive the original code and a list of suggestions.
-        - Apply the suggestions to fix and beautify the code.
-        - Return only the final, corrected, and complete Manim script.
-        
-        Args:
-            original_code: The original Manim code script.
-            suggestions: The text suggestions from the first function.
-            api_key: Your Google AI API key.
-
-        Returns:
-            str: A fully corrected, valid, and visually pleasing Manim code.
+        Use LLM to apply suggested corrections to Manim code.
         """
-        
-        # Configure Gemini
-        model = genai.GenerativeModel("gemini-2.5-pro")
-
-        # LLM prompt for correction
         prompt = f"""
         You are an expert Manim animation developer.
         Your task is to correct and beautify a Manim script based on a set of suggestions.
@@ -421,34 +331,23 @@ Return ONLY complete Python code. No markdown. No explanations. Just code."""
         """
 
         try:
-            # Generate with Gemini
-            response = model.generate_content(prompt)
-
-            # Extract the generated code
-            corrected_code = response.text.strip()
+            corrected_code = generate_pro(prompt, temperature=0.3)
+            corrected_code = corrected_code.strip()
 
             # Clean up markdown fences
-            # Use regex to find content between ```python and ```
             match = re.search(r"```python\s*(.*?)\s*```", corrected_code, re.DOTALL)
             if match:
                 corrected_code = match.group(1).strip()
             else:
-                # Fallback for simple ```
                 match = re.search(r"```\s*(.*?)\s*```", corrected_code, re.DOTALL)
                 if match:
                     corrected_code = match.group(1).strip()
-            
-            # If no fences are found, assume the whole response is the code
-            # (This handles cases where the model correctly follows the "only code" rule)
             
             return corrected_code
         except Exception as e:
             print(f"Error applying corrections: {e}")
             return f"Error: Could not generate corrected code. {e}"
     
-        
-                                
-        
     def execute_manim_code(self, code, output_name):
         """Execute Manim code"""
         print(f"      🎬 Rendering (2-3 min)...")
@@ -546,8 +445,8 @@ Return ONLY complete Python code. No markdown. No explanations. Just code."""
             code1 = self.generate_manim_code(plan['title'], detailed_prompt)
             print(code1)
             print("code")
-            suggestions=self.get_manim_correction_suggestions(code1)
-            code=self.apply_manim_corrections(code1,suggestions)
+            suggestions = self.get_manim_correction_suggestions(code1)
+            code = self.apply_manim_corrections(code1, suggestions)
 
 
             if not code:
@@ -588,4 +487,3 @@ Return ONLY complete Python code. No markdown. No explanations. Just code."""
             json.dump(results, f, indent=2)
 
         return {"success": True, "animations": results}
-

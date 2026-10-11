@@ -14,15 +14,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get Gemini API key from environment
     const geminiApiKey = process.env.GEMINI_API_KEY;
-    if (!geminiApiKey) {
-      return NextResponse.json(
-        { error: 'Gemini API key not configured' },
-        { status: 500 }
-      );
-    }
-
     // Generate topic recommendations
     const topics = await recommendTopics(lectureContent, geminiApiKey);
 

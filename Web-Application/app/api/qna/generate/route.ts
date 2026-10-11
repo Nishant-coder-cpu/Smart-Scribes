@@ -21,25 +21,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get API keys from environment
-    const geminiApiKey = process.env.GEMINI_API_KEY;
-    const googleSearchApiKey = process.env.GOOGLE_SEARCH_API_KEY;
-    const searchEngineId = process.env.GOOGLE_SEARCH_ENGINE_ID;
-
-    if (!geminiApiKey) {
-      return NextResponse.json(
-        { error: 'Gemini API key not configured' },
-        { status: 500 }
-      );
-    }
-
-    // Generate questions and answers
+    // Generate questions and answers via LLM
     const questions = await generateQnA(
       topic,
-      questionFormat,
-      geminiApiKey,
-      googleSearchApiKey,
-      searchEngineId
+      questionFormat
     );
 
     if (!questions || questions.length === 0) {
