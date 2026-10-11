@@ -203,8 +203,8 @@ export function ProfessorDashboard({ onLogout }: ProfessorDashboardProps) {
     }
   };
 
-  const handleReply = async (id: string) => {
-    const replyText = prompt("Enter your reply:");
+  const handleReply = async (id: string, customReply?: string) => {
+    const replyText = customReply || prompt("Enter your reply:");
     if (!replyText) return;
     try {
       await replyToDoubt(id, replyText);

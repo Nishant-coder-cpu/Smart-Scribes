@@ -1,26 +1,24 @@
 """
-gemini_auto_merge_all_in_one.py
-Directly sends both JSONs (summary + animations) to Gemini 2.5 Flash.
-Gemini itself merges animations into the correct topics and returns a full JSON.
+auto_merge_all_in_one.py
+Sends both JSONs (summary + animations) to the LLM.
+The LLM merges animations into the correct topics and returns a full JSON.
+
+Supports AWS Bedrock (Claude) and Google Gemini via llm_provider.
 """
 
 import os
 import json
+import re
 from pathlib import Path
-from google import genai
-from google.genai.types import Content, Part
 from dotenv import load_dotenv
+
+from llm_provider import generate_fast, safe_json
 
 load_dotenv()
 
 
-def init_gemini_client():
-    api_key = os.getenv("GEMINI_API_KEY")
-    return genai.Client(api_key=api_key)
-
-
-def gemini_merge_all(summary_path, animations_path, output_path):
-    client = init_gemini_client()
+def merge_all(summary_path, animations_path, output_path):
+    """Send both JSON files to the LLM and get a merged result."""
 
     # Load both JSON files
     with open(summary_path, "r", encoding="utf-8") as f:
@@ -28,7 +26,6 @@ def gemini_merge_all(summary_path, animations_path, output_path):
     with open(animations_path, "r", encoding="utf-8") as f:
         animations = json.load(f)
 
-    # Combine data into one big prompt
     prompt = f"""
 You are an intelligent data structurer. 
 You will receive two JSON datasets: 
@@ -62,31 +59,26 @@ Your task:
 
 Only output the JSON — no explanations, comments, or markdown.
 If no animation matches a topic, output an empty array for "animations".
+
+LECTURE SUMMARY:
+{json.dumps({"lecture_summary": summary_data}, ensure_ascii=False)}
+
+ANIMATIONS:
+{json.dumps({"animations": animations}, ensure_ascii=False)}
 """
 
-    # Send both JSON files as structured inputs
-    resp = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=[
-            Content(role="user", parts=[
-                Part(text=prompt),
-                Part(text=json.dumps({"lecture_summary": summary_data}, ensure_ascii=False)),
-                Part(text=json.dumps({"animations": animations}, ensure_ascii=False))
-            ])
-        ]
-    )
+    text = generate_fast(prompt, temperature=0.3, max_tokens=8192)
 
     # Try to extract and parse JSON
-    text = (resp.text or "").strip()
+    text = text.strip()
     try:
         merged_data = json.loads(text)
     except Exception:
-        import re
         try:
             json_part = re.search(r"\{.*\}", text, re.S).group()
             merged_data = json.loads(json_part)
         except Exception as e:
-            raise ValueError("❌ Could not parse Gemini's JSON output.") from e
+            raise ValueError("❌ Could not parse LLM's JSON output.") from e
 
     # Save merged JSON
     with open(output_path, "w", encoding="utf-8") as f:
@@ -97,3 +89,6 @@ If no animation matches a topic, output an empty array for "animations".
     return merged_data
 
 
+# Keep old name as alias for backward compatibility
+gemini_merge_all = merge_all
+init_gemini_client = None  # no longer needed

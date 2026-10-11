@@ -1,56 +1,24 @@
 from datetime import timedelta
-import google.generativeai as genai
 import os
 import json
 from dotenv import load_dotenv
 
+from llm_provider import generate as llm_generate, generate_fast
+
 load_dotenv()
-api_key = os.getenv("GEMINI_API_KEY")
+
 
 class LectureDocumentGenerator:
-    def __init__(self,api_key = api_key, model_name=os.getenv("GEMINI_MODEL_FAST", "gemini-2.5-flash")):
-       
-        
-        if api_key is None:
-            api_key = os.environ.get("GEMINI_API_KEY")
-            if not api_key:
-                raise ValueError(
-                    "❌ GEMINI_API_KEY not found!\n"
-                    "Set it as environment variable:\n"
-                    "  export GEMINI_API_KEY='your_key_here'\n"
-                    "Or pass it directly to LectureDocumentGenerator(api_key='your_key')"
-                )
-        
-        try:
-            # Configure Gemini
-            genai.configure(api_key=api_key)
-            print(f"✓ API configured")
-            
-            # Create model instance
-            self.model_name = model_name
-            self.model = genai.GenerativeModel(self.model_name)
-            print(f"✓ Model created: {self.model_name}")
-            
-            # Test the model with a simple prompt (skip if fails - will retry with actual content)
-            try:
-                test_response = self.model.generate_content("Test", safety_settings=[
-                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"},
-                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_ONLY_HIGH"},
-                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_ONLY_HIGH"},
-                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_ONLY_HIGH"}
-                ])
-                print(f"✓ Model test successful")
-            except:
-                print(f"⚠  Model test skipped (will be tested with actual content)")
-            
-            print(f"✅ Using Gemini API with model: {self.model_name}")
-        except Exception as e:
-            print(f"❌ Error initializing Gemini model: {e}")
-            print(f"   Error type: {type(e)._name_}")
-            raise
+    def __init__(self, api_key=None, model_name=None):
+        """
+        Initialize the lecture document generator.
+        Uses the centralized llm_provider for all LLM calls.
+        """
+        print(f"✅ Using LLM provider: {os.getenv('DEFAULT_LLM_PROVIDER', 'aws')}")
         
         # Load audio transcripts separately
         self.audio_transcripts = {}
+
     def load_audio_transcripts(self, audio_json_path):
         """
         Load audio transcripts from JSON file
@@ -137,7 +105,7 @@ class LectureDocumentGenerator:
         return summary
     
     def generate_segment_summary(self, segment_data, all_segments, max_length=1000):
-        """Generate summary using Gemini API with BOTH audio transcript and book references"""
+        """Generate summary using the configured LLM provider with BOTH audio transcript and book references"""
         
         # Extract data - handle MULTIPLE possible key names
         book_refs = segment_data.get('book_references', [])
@@ -205,9 +173,6 @@ class LectureDocumentGenerator:
             print("  ⚠  No book references found for this segment")
         
         # Create comprehensive prompt with BOTH lecture audio AND book content
-        # NO ASTERISKS to avoid Gemini safety filters
-        
-        # If no transcript, adjust prompt to focus on textbook content
         if not lecture_audio_text:
             prompt = f"""You are an expert academic content summarizer. Create a comprehensive educational summary based on textbook content.
 
@@ -265,75 +230,17 @@ Summary:"""
         else:
             print(f"Audio content included: NO ✗")
         
-        # Call Gemini API
+        # Call LLM API
         try:
-            # Verify model exists
-            if not hasattr(self, 'model') or self.model is None:
-                raise AttributeError("Model not properly initialized. Please check API key and initialization.")
+            print(f"Calling LLM API...")
             
-            print(f"Calling Gemini API...")
-            
-            # Configure generation settings
-            generation_config = {
-                "temperature": 0.7,
-                "top_p": 0.95,
-                "top_k": 40,
-                
-            }
-            
-            # Configure safety settings to be minimal for educational content
-            # Using BLOCK_ONLY_HIGH to allow educational/academic content
-            safety_settings = [
-                {
-                    "category": "HARM_CATEGORY_HARASSMENT",
-                    "threshold": "BLOCK_ONLY_HIGH"
-                },
-                {
-                    "category": "HARM_CATEGORY_HATE_SPEECH",
-                    "threshold": "BLOCK_ONLY_HIGH"
-                },
-                {
-                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                    "threshold": "BLOCK_ONLY_HIGH"
-                },
-                {
-                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                    "threshold": "BLOCK_ONLY_HIGH"
-                }
-            ]
-            
-            # Generate content
-            response = self.model.generate_content(
-                prompt,
-                generation_config=generation_config,
-                safety_settings=safety_settings
-            )
-            
-            # Check if response was blocked
-            if not response.candidates or not response.candidates[0].content.parts:
-                print(f"⚠  Response blocked. Finish reason: {response.candidates[0].finish_reason if response.candidates else 'UNKNOWN'}")
-                print(f"   Safety ratings: {response.candidates[0].safety_ratings if response.candidates else 'N/A'}")
-                raise ValueError(f"Content blocked by safety filters (finish_reason={response.candidates[0].finish_reason if response.candidates else 'UNKNOWN'})")
-            
-            summary = response.text
+            summary = generate_fast(prompt, temperature=0.7)
             print(f"✓ Summary generated: {len(summary)} chars")
             print(f"Preview: {summary[:150]}...")
             
-        except AttributeError as e:
-            print(f"❌ Model initialization error: {e}")
-            print("   Please ensure the API key is valid and the model is properly initialized.")
-            summary = self._create_fallback_summary(segment_data, lecture_audio_text, book_refs)
-        except ValueError as e:
-            # Handle Gemini safety filter blocks (finish_reason=2)
-            print(f"❌ Content blocked by Gemini safety filters: {e}")
-            print("   This usually happens when:")
-            print("   - No audio transcript is available")
-            print("   - Content is too sparse or repetitive")
-            print("   - Creating fallback summary...")
-            summary = self._create_fallback_summary(segment_data, lecture_audio_text, book_refs)
         except Exception as e:
-            print(f"❌ Error calling Gemini API: {e}")
-            print(f"   Error type: {type(e)._name_}")
+            print(f"❌ Error calling LLM API: {e}")
+            print(f"   Error type: {type(e).__name__}")
             summary = self._create_fallback_summary(segment_data, lecture_audio_text, book_refs)
         
         print("--- END DEBUG ---\n")
@@ -427,7 +334,7 @@ def process_json_file(json_file_path, api_key=None, output_path=None, audio_tran
     
     Args:
         json_file_path: Path to your JSON file with segment_1, segment_2, etc.
-        api_key: Optional Gemini API key
+        api_key: Optional API key (ignored, uses env vars via llm_provider)
         output_path: Optional custom output path. If None, auto-generates from input path
         audio_transcript_path: Optional path to audio_transcript.json file
     
@@ -467,7 +374,7 @@ def process_json_file(json_file_path, api_key=None, output_path=None, audio_tran
         print(f"✓ First segment transcript length: {len(all_segments[0].get('transcript', ''))} chars")
     
     # Initialize generator
-    generator = LectureDocumentGenerator(api_key=api_key)
+    generator = LectureDocumentGenerator()
     
     # Load audio transcripts if provided
     if audio_transcript_path:

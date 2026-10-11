@@ -43,8 +43,8 @@ BOOK_METADATA_PATH = os.path.join("output", f"{BOOK_NAME}_metadata.json")
 BOOK_EMBEDDINGS_PATH = os.path.join("book_embeddings", BOOK_NAME)
 
 # --- LLM models -------------------------------------------------------------
-GEMINI_MODEL_FAST = os.getenv("GEMINI_MODEL_FAST", "gemini-2.5-flash")
-GEMINI_MODEL_PRO = os.getenv("GEMINI_MODEL_PRO", "gemini-2.5-pro")
+# Provider: "aws" (Bedrock/Claude) or "gemini"
+DEFAULT_LLM_PROVIDER = os.getenv("DEFAULT_LLM_PROVIDER", "aws")
 
 
 def make_lecture_id(course_id: str, lecture_folder: str) -> str:

@@ -1,11 +1,13 @@
 """
-auto_gemini_topic_pipeline.py
-Fully autonomous, multi-agent Gemini 2.5 Flash pipeline.
+auto_topic_pipeline.py
+Fully autonomous, multi-agent pipeline.
 Agents:
   0 → Overall topic generator
   1 → Subtopic extractor
   2 → Topic synthesizer (parallel)
   3 → Reference mapper (per-topic)
+
+Supports AWS Bedrock (Claude) and Google Gemini via llm_provider.
 """
 
 import os, re, json, textwrap
@@ -13,31 +15,22 @@ from typing import List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 
-try:
-    from google import genai
-    from google.genai.types import Content, Part
-except Exception as e:
-    raise ImportError("google-genai not installed; install or adapt the client import") from e
+from llm_provider import generate_fast, safe_json
 
 # ---------------- CONFIG ----------------
-INPUT_FILE_PATH ="all_data.txt"   
+INPUT_FILE_PATH = "all_data.txt"
 MAX_TOPICS = 10
 WORKERS = 4
 load_dotenv()
 # ----------------------------------------
 
-class GeminiLectureProcessor:
+class LectureProcessor:
     def __init__(self, input_path: str):
         self.input_path = input_path
-        self.api_key = os.getenv('GEMINI_API_KEY')
-        self.client = self._init_client()
         self.segments = self._load_and_parse_lecture_txt()
         self.candidate_refs = self._collect_candidate_refs()
 
     # ---------- utilities ----------
-    def _init_client(self):
-        return genai.Client(api_key=self.api_key)
-
     def _read_file(self):
         with open(self.input_path, "r", encoding="utf-8") as f:
             return f.read().replace("\r\n", "\n").replace("\r", "\n")
@@ -90,37 +83,33 @@ class GeminiLectureProcessor:
 
     # ---------- Agent 0 ----------
     def agent0_overall_topic(self, combined_text: str) -> str:
-        prompt = f"""
+        prompt = textwrap.dedent(f"""
         Read the lecture content below and create a concise, descriptive overall topic title (max 10 words).
         Return ONLY JSON like: {{ "overall_topic": "Your title" }}
         LECTURE CONTENT:
         {combined_text}
-        """
-        resp = self.client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[Content(role="user", parts=[Part(text=textwrap.dedent(prompt))])])
-        data = self._safe_json(resp.text)
+        """)
+        resp = generate_fast(prompt, temperature=0.3)
+        data = safe_json(resp)
         if isinstance(data, dict) and "overall_topic" in data:
             return data["overall_topic"].strip()
         return "Untitled Lecture"
 
     # ---------- Agent 1 ----------
     def agent1_extract_topics(self, overall_topic, combined_text):
-        prompt = f"""
+        prompt = textwrap.dedent(f"""
         Overall topic: "{overall_topic}"
         From the lecture below, output ONLY a JSON array of 3–{MAX_TOPICS} concise subtopics (3–6 words each).
         LECTURE CONTENT:
         {combined_text}
-        """
-        resp = self.client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[Content(role="user", parts=[Part(text=textwrap.dedent(prompt))])])
-        arr = self._safe_json(resp.text)
+        """)
+        resp = generate_fast(prompt, temperature=0.3)
+        arr = safe_json(resp)
         return [re.sub(r"\s+", " ", t).strip() for t in arr if isinstance(t, str)] if isinstance(arr, list) else []
 
     # ---------- Agent 2 ----------
     def agent2_topic_detail(self, overall_topic, topic, context):
-        prompt = f"""
+        prompt = textwrap.dedent(f"""
         Write ONLY JSON:
         {{
           "topic": "{topic}",
@@ -129,11 +118,9 @@ class GeminiLectureProcessor:
         }}
         CONTEXT:
         {context}
-        """
-        resp = self.client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[Content(role="user", parts=[Part(text=textwrap.dedent(prompt))])])
-        data = self._safe_json(resp.text)
+        """)
+        resp = generate_fast(prompt, temperature=0.5)
+        data = safe_json(resp)
         return {
             "topic": topic,
             "details": (data.get("details", "") if isinstance(data, dict) else "").strip(),
@@ -143,7 +130,7 @@ class GeminiLectureProcessor:
     # ---------- Agent 3 ----------
     def agent3_map_refs(self, topic, context, candidate_refs):
         cand = "\n".join([f"{i+1}. {r}" for i, r in enumerate(candidate_refs)]) or "No refs"
-        prompt = f"""
+        prompt = textwrap.dedent(f"""
         For topic "{topic}", pick relevant references from the list below.
         Output ONLY a JSON array of exact strings (subset of candidates).
 
@@ -152,26 +139,12 @@ class GeminiLectureProcessor:
 
         CANDIDATE REFERENCES:
         {cand}
-        """
-        resp = self.client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[Content(role="user", parts=[Part(text=textwrap.dedent(prompt))])])
-        arr = self._safe_json(resp.text)
+        """)
+        resp = generate_fast(prompt, temperature=0.3)
+        arr = safe_json(resp)
         return arr if isinstance(arr, list) else []
 
     # ---------- helper ----------
-    def _safe_json(self, text: str):
-        try:
-            return json.loads(text)
-        except Exception:
-            try:
-                return json.loads(text[text.index("{"):text.rindex("}") + 1])
-            except Exception:
-                try:
-                    return json.loads(text[text.index("["):text.rindex("]") + 1])
-                except Exception:
-                    return {}
-
     def _build_context(self, topic):
         words = [w for w in re.split(r"\W+", topic.lower()) if len(w) > 3]
         matched = [s["full_text"] for s in self.segments if any(w in s["full_text"].lower() for w in words)]
@@ -219,6 +192,3 @@ class GeminiLectureProcessor:
         refs = self.agent3_map_refs(topic, context, self.candidate_refs)
         detail["book_references"] = refs
         return detail
-
-
-    
