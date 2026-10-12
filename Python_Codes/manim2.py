@@ -377,6 +377,7 @@ Return ONLY complete Python code. No markdown. No explanations. Just code."""
                     r"rate_functions.\1",
                     code,
                 )
+                code = code.replace("rate_functions.LINEAR", "linear")
 
                 with open(script, "w", encoding='utf-8') as f:
                     f.write(code)
@@ -498,6 +499,13 @@ Return ONLY complete Python code. No markdown. No explanations. Just code."""
             print("code")
             suggestions = self.get_manim_correction_suggestions(code1)
             code = self.apply_manim_corrections(code1, suggestions)
+
+            # A rate-limited correction request must not discard a valid
+            # generated scene. The renderer's compatibility normalizers still
+            # provide a deterministic validation pass for the original code.
+            if not code or code.lstrip().startswith("Error:"):
+                print("   ⚠️ Correction unavailable; rendering original generated code.")
+                code = code1
 
 
             if not code:

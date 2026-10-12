@@ -19,3 +19,28 @@ __pycache__/
 # GCP service-account keys (prevent GitHub Secret Scanning rejection)
 *-key.json
 smart-scribe-*.json
+
+# Local ML model snapshots and Hugging Face download state
+Python_Codes/.hf-cache/
+Python_Codes/.hf-cache-production/
+Python_Codes/.hf-cache*/
+
+# Source media and reproducible pipeline outputs
+Python_Codes/demo_audio.mp3
+Python_Codes/demo_lecture.mp4
+Python_Codes/demo_book.pdf
+Python_Codes/audio_full/
+Python_Codes/video_full/
+Python_Codes/frames_temp/
+Python_Codes/book/
+Python_Codes/book_embeddings/
+Python_Codes/output/
+Python_Codes/smart_scribes_animations/
+Python_Codes/*.npy
+Python_Codes/full_data.json
+Python_Codes/final.json
+Python_Codes/lecture_analysis.json
+Python_Codes/lecture_book_matches.json
+Python_Codes/all_data.txt
+Python_Codes/results.json
+Python_Codes/merged_all_in_one_gemini.json
