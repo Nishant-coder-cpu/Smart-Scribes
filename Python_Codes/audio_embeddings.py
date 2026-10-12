@@ -19,14 +19,17 @@ class AudioVectorizer:
     def __init__(self, hf_asr_model="openai/whisper-base"): 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.asr_enabled = os.getenv("PIPELINE_DISABLE_ASR", "false").lower() not in {"1", "true", "yes"}
+        # A local Hugging Face snapshot path is useful for fully offline runs
+        # (and avoids re-downloading a model that is already present).
+        self.asr_model_name = os.getenv("HF_ASR_MODEL", hf_asr_model)
         print(f"Using device: {self.device}")
 
         self.transcription_model = None
         if self.asr_enabled:
-            print(f"Loading HF ASR model ({hf_asr_model})...")
+            print(f"Loading HF ASR model ({self.asr_model_name})...")
             self.transcription_model = pipeline(
                 "automatic-speech-recognition",
-                model=hf_asr_model,
+                model=self.asr_model_name,
                 device=self.device
             )
             print("HF ASR (Whisper) model loaded successfully.")

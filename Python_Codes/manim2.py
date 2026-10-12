@@ -366,15 +366,40 @@ Return ONLY complete Python code. No markdown. No explanations. Just code."""
                         print(f"      ❌ Security Error: Generated code contains forbidden pattern '{pattern}'")
                         return {"success": False, "error": f"Security violation: {pattern}"}
 
+                # ``align_left`` appears in otherwise valid LLM-generated
+                # scenes, but is not a Manim API. Its direct equivalent is
+                # ``align_to(..., LEFT)``; normalize it before rendering.
+                code = re.sub(r"\.align_left\(([^\n\)]*)\)", r".align_to(\1, LEFT)", code)
+                # Manim exposes easing functions through ``rate_functions``;
+                # generated scenes often omit that namespace.
+                code = re.sub(
+                    r"(?<![\w.])(ease_(?:in|out|in_out)_(?:sine|quad|cubic|quart|quint|expo|circ|back|elastic|bounce))\b",
+                    r"rate_functions.\1",
+                    code,
+                )
+
                 with open(script, "w", encoding='utf-8') as f:
                     f.write(code)
 
+                # Generated scenes are named after their topic, not always
+                # ``AnimationScene``. Resolve the actual Manim Scene class so
+                # the renderer receives a valid target.
+                scene_match = re.search(
+                    r"class\s+([A-Za-z_]\w*)\s*\(\s*(?:Scene|MovingCameraScene|ThreeDScene)\s*\)",
+                    code,
+                )
+                if not scene_match:
+                    return {"success": False, "error": "No Manim Scene subclass found in generated code."}
+                scene_class = scene_match.group(1)
+
                 result = subprocess.run(
-                    [self.manim_executable, "-pqh", script, "AnimationScene"],
+                    [self.manim_executable, "-qh", script, scene_class],
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     cwd=temp_dir,
-                    timeout=180
+                    timeout=int(os.getenv("MANIM_RENDER_TIMEOUT", "600")),
                 )
 
                 if result.returncode == 0:
@@ -394,7 +419,7 @@ Return ONLY complete Python code. No markdown. No explanations. Just code."""
                         print(f"      ✅ Video: {dest.name}")
                         return {"success": True, "file": str(dest)}
 
-                error_lines = result.stderr.split('\n')
+                error_lines = (result.stderr or result.stdout or "").split('\n')
                 print(f"      ❌ Error:")
                 for line in error_lines[-5:]:
                     if line.strip():
@@ -438,6 +463,32 @@ Return ONLY complete Python code. No markdown. No explanations. Just code."""
             print(f"Animation {i}/{len(animations)}: {plan['title'][:50]}")
             print(f"{'='*80}")
 
+            name = f"anim_{i:02d}_{plan['title'][:25].lower().replace(' ', '_')}"
+            name = re.sub(r'[^a-zA-Z0-9_]', '_', name)
+            code_file = self.output_dir / f"{name}.py"
+            video_file = self.output_dir / f"{name}.mp4"
+            # Titles may vary slightly between LLM planning runs; the indexed
+            # prefix is the stable identity of an animation slot.
+            existing_videos = sorted(
+                path for path in self.output_dir.glob(f"anim_{i:02d}_*.mp4")
+                if path.is_file() and path.stat().st_size > 0
+            )
+            if existing_videos:
+                video_file = existing_videos[0]
+                existing_code = video_file.with_suffix(".py")
+                if existing_code.is_file():
+                    code_file = existing_code
+                print(f"   ⏭️ Reusing completed video: {video_file.name}")
+                results.append({
+                    'index': i,
+                    'title': plan['title'],
+                    'success': True,
+                    'video': str(video_file),
+                    'code': str(code_file),
+                    'duration': '60 seconds'
+                })
+                continue
+
             # Step 1: Create detailed prompt
             detailed_prompt = self.create_detailed_animation_prompt(plan['title'])
             
@@ -454,10 +505,6 @@ Return ONLY complete Python code. No markdown. No explanations. Just code."""
                 continue
 
             # Save
-            name = f"anim_{i:02d}_{plan['title'][:25].lower().replace(' ', '_')}"
-            name = re.sub(r'[^a-zA-Z0-9_]', '_', name)
-            code_file = self.output_dir / f"{name}.py"
-
             with open(code_file, 'w', encoding='utf-8') as f:
                 f.write(code)
             print(f"   💾 Code: {code_file.name}")

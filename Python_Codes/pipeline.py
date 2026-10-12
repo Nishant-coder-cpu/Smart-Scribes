@@ -204,6 +204,13 @@ def run_pipeline(task, progress_callback=None):
             output_path="all_data.txt"
     )
 
+    # Local model verification should be able to complete without invoking
+    # remote LLMs, long animation renders, or cloud publishing.  The default
+    # remains the full production flow; opt in only for local core runs.
+    if os.getenv("PIPELINE_LOCAL_CORE_ONLY", "false").lower() in {"1", "true", "yes"}:
+        print("Local core pipeline completed; animation, Gemini, and publish stages skipped.")
+        return
+
     clean_directory("smart_scribes_animations")
 
     if progress_callback:
@@ -220,7 +227,7 @@ def run_pipeline(task, progress_callback=None):
     if progress_callback:
         progress_callback(90, "Processing with Gemini")
 
-    processor = GeminiLectureProcessor("all_data.txt")
+    processor = LectureProcessor("all_data.txt")
     processor.run()
 
     summary_path = "final.json"

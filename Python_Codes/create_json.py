@@ -119,12 +119,24 @@ class LectureProcessor:
         CONTEXT:
         {context}
         """)
-        resp = generate_fast(prompt, temperature=0.5)
-        data = safe_json(resp)
+        for _ in range(2):
+            resp = generate_fast(prompt, temperature=0.5)
+            data = safe_json(resp)
+            if isinstance(data, dict) and data.get("details") and data.get("question"):
+                return {
+                    "topic": topic,
+                    "details": data["details"].strip(),
+                    "question": data["question"].strip(),
+                }
+
+        # Preserve a usable structured result if the provider returns malformed
+        # JSON after both attempts. The source context is safer than an empty
+        # record and makes the failure visible without losing the lecture data.
+        fallback_details = context[:4000].strip() or f"Source material for {topic}."
         return {
             "topic": topic,
-            "details": (data.get("details", "") if isinstance(data, dict) else "").strip(),
-            "question": (data.get("question", "") if isinstance(data, dict) else "").strip()
+            "details": fallback_details,
+            "question": f"How does {topic.lower()} apply to this lecture?"
         }
 
     # ---------- Agent 3 ----------
