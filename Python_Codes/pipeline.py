@@ -13,6 +13,7 @@ import json
 from manim2 import *
 from google_storage_code import *
 import os
+import shutil
 from create_json import *
 from lastjson import *
 from cleaning import *
@@ -31,19 +32,53 @@ VIDEO_DIM = 384
 AUDIO_DIM = 384
 BUCKET_NAME = config.BUCKET_NAME
 
-def run_pipeline(task, progress_callback=None):
-    if progress_callback:
-        progress_callback(5, "Downloading lecture files")
+
+def resolve_input_files(task):
+    """Resolve source media without downloading when local paths are supplied.
+
+    Production workers continue to download from GCS.  Local smoke runs set all
+    three ``PIPELINE_LOCAL_*`` variables, which avoids clearing or downloading
+    already-available demo assets on every retry.
+    """
+    local_audio = os.getenv("PIPELINE_LOCAL_AUDIO")
+    local_video = os.getenv("PIPELINE_LOCAL_VIDEO")
+    local_book = os.getenv("PIPELINE_LOCAL_BOOK")
+    supplied = [local_audio, local_video, local_book]
+
+    if any(supplied):
+        if not all(supplied):
+            raise RuntimeError(
+                "Set PIPELINE_LOCAL_AUDIO, PIPELINE_LOCAL_VIDEO and "
+                "PIPELINE_LOCAL_BOOK together, or set none to use GCS."
+            )
+        missing = [path for path in supplied if not os.path.isfile(path)]
+        if missing:
+            raise FileNotFoundError(f"Local pipeline input not found: {missing}")
+        os.makedirs(config.BOOK_DIR, exist_ok=True)
+        # BookEmbeddingProcessor has a canonical book path; copying only the
+        # small PDF keeps its downstream contract unchanged.
+        if os.path.abspath(local_book) != os.path.abspath(config.BOOK_PDF_PATH):
+            shutil.copy2(local_book, config.BOOK_PDF_PATH)
+        print("Using local audio, video and PDF inputs; GCS download skipped.")
+        return local_audio, local_video
+
     download_lecture_files(BUCKET_NAME, task[0], task[1])
-    download_book(BUCKET_NAME,task[0])
+    download_book(BUCKET_NAME, task[0])
     file_video = os.listdir(local_dir_video)
     file_audio = os.listdir(local_dir_audio)
     if not file_video or not file_audio:
         raise RuntimeError(
             f"Lecture {task} is missing audio or video (audio={file_audio}, video={file_video})"
         )
-    AUDIO_SNIPPET_FILE = os.path.join(local_dir_audio, file_audio[0])
-    VIDEO_SNIPPET_FILE = os.path.join(local_dir_video, file_video[0])
+    return (
+        os.path.join(local_dir_audio, file_audio[0]),
+        os.path.join(local_dir_video, file_video[0]),
+    )
+
+def run_pipeline(task, progress_callback=None):
+    if progress_callback:
+        progress_callback(5, "Downloading lecture files")
+    AUDIO_SNIPPET_FILE, VIDEO_SNIPPET_FILE = resolve_input_files(task)
 
     print("\nLoading all models... (This may take a moment)")
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -140,7 +175,7 @@ def run_pipeline(task, progress_callback=None):
     print("Step 2: Matching lecture with book content...")
     print("=" * 80)
     matcher = LectureBookMatcher(
-            similarity_threshold=0.3,
+            similarity_threshold=float(os.getenv("BOOK_MATCH_SIMILARITY_THRESHOLD", "0.3")),
             seconds_per_embedding=10,
             segment_duration_minutes=5
     )

@@ -8,10 +8,14 @@ variables / the .env file.
 
 import os
 import shutil
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+# Always load the pipeline configuration next to this module.  Relying on the
+# process working directory made credentials disappear when the worker started
+# from the repository root or a service manager.
+load_dotenv(Path(__file__).with_name(".env"))
 
 
 def _resolve_ffmpeg() -> str:
@@ -32,7 +36,7 @@ def _resolve_ffmpeg() -> str:
 FFMPEG_PATH = _resolve_ffmpeg()
 
 # --- Google Cloud Storage ---------------------------------------------------
-BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "smartscribe_input")
+BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "smart-scribes")
 
 # --- Book / reference material ---------------------------------------------
 # Name used for the locally downloaded course PDF and its derived artifacts.

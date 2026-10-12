@@ -247,7 +247,7 @@ export async function createLectureProcessing(processing: {
   }
 }
 
-export async function updateLectureProcessingStatus(id: string, status: 'uploading' | 'processing' | 'generating' | 'completed'): Promise<void> {
+export async function updateLectureProcessingStatus(id: string, status: LectureProcessing['status']): Promise<void> {
   const { error } = await supabase
     .from('lectures_processing')
     .update({ status })

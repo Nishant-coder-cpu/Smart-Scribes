@@ -1,11 +1,13 @@
 import os
 import time
 import traceback
+from pathlib import Path
+from urllib.parse import unquote, urlparse
 from supabase import create_client, Client
 from dotenv import load_dotenv
 from pipeline import run_pipeline
 
-load_dotenv()
+load_dotenv(Path(__file__).with_name(".env"))
 
 def get_supabase_client() -> Client:
     # Use the service role key to bypass RLS for the background worker
@@ -32,6 +34,21 @@ def update_job_status(supabase: Client, job_id: str, status: str, stage: str = N
     except Exception as e:
         print(f"Failed to update job status for {job_id}: {e}")
 
+def task_from_media_url(media_url: str | None, lecture_id: str) -> list[str]:
+    """Return the exact GCS course/folder path used by the web uploader."""
+    if media_url:
+        path = unquote(urlparse(media_url).path).lstrip("/")
+        marker = "/courses/"
+        if marker in f"/{path}":
+            parts = f"/{path}".split(marker, 1)[1].split("/")
+            if len(parts) >= 4 and parts[1] == "lectures":
+                return [parts[0], parts[2]]
+    # Legacy fallback. IDs lose dashes, so queued media URLs are preferred.
+    if "-l" not in lecture_id:
+        raise ValueError(f"Invalid lecture_id format: {lecture_id}")
+    course_id, lecture_number = lecture_id.rsplit("-l", 1)
+    return [course_id, lecture_number]
+
 def process_jobs():
     supabase = get_supabase_client()
     print("🚀 Worker started. Listening for new jobs...")
@@ -53,16 +70,7 @@ def process_jobs():
             print(f"\n" + "="*50)
             print(f"📥 Picked up new job: {job_id} for lecture: {lecture_id}")
             
-            # Extract courseId and lectureFolder from lecture_id
-            # Assuming format: courseId-llectureNumber (e.g. ic112-l1)
-            if "-l" not in lecture_id:
-                raise ValueError(f"Invalid lecture_id format: {lecture_id}")
-                
-            parts = lecture_id.split("-l")
-            course_id = parts[0]
-            lecture_number = parts[1]
-            
-            task = [course_id, lecture_number]
+            task = task_from_media_url(job.get("audio_file") or job.get("video_file"), lecture_id)
             
             update_job_status(supabase, job_id, "processing", stage="initializing", progress=2)
             

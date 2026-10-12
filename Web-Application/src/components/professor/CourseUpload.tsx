@@ -4,7 +4,7 @@ import { Input } from "../ui/input";
 import { Card } from "../ui/card";
 import { FileAudio, FileVideo, Hash, Calendar } from "lucide-react";
 import { Course } from "../../types/index";
-import { getLectures, createLecture, createLectureProcessing, updateLectureProcessingStatus } from "../../lib/api";
+import { getLectures, createLecture } from "../../lib/api";
 
 interface CourseUploadProps {
   selectedCourse: Course;
@@ -89,9 +89,10 @@ export function CourseUpload({
         putFile(videoInit.uploadUrl, videoFile),
       ]);
 
+      const bucketName = process.env.NEXT_PUBLIC_GCS_BUCKET_NAME || 'smart-scribes';
       const data = {
-        audioUrl: `https://storage.googleapis.com/${process.env.NEXT_PUBLIC_GCS_BUCKET_NAME || ''}/${encodeURI(audioInit.destinationPath)}`,
-        videoUrl: `https://storage.googleapis.com/${process.env.NEXT_PUBLIC_GCS_BUCKET_NAME || ''}/${encodeURI(videoInit.destinationPath)}`,
+        audioUrl: `https://storage.googleapis.com/${bucketName}/${encodeURI(audioInit.destinationPath)}`,
+        videoUrl: `https://storage.googleapis.com/${bucketName}/${encodeURI(videoInit.destinationPath)}`,
       } as const;
 
       const evt = new CustomEvent("gcs-upload-completed", {
@@ -103,7 +104,7 @@ export function CourseUpload({
       window.dispatchEvent(evt);
       alert("✅ Files uploaded to cloud successfully.");
 
-      // Ensure lecture exists, then create processing record
+      // The parent lecture must exist before its background job is queued.
       const courseId = selectedCourse.id;
       const lectureNum = Number(lectureNumber);
       // Try to find an existing lecture for this course and number
@@ -126,18 +127,23 @@ export function CourseUpload({
         console.error("Failed ensuring lecture exists:", err);
       }
 
-      if (lectureId) {
-        try {
-          const proc = await createLectureProcessing({
-            lectureId,
-            audioFile: data.audioUrl as string,
-            videoFile: data.videoUrl as string,
-          });
-          // Move to processing state right away per requirement
-          await updateLectureProcessingStatus(proc.id, 'processing');
-        } catch (err) {
-          console.error("Failed creating or updating lecture processing row:", err);
-        }
+      if (!lectureId) {
+        throw new Error("Could not create the lecture record before queueing it.");
+      }
+
+      const jobResponse = await fetch("/api/jobs/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          courseId,
+          lectureNumber,
+          audioUrl: data.audioUrl,
+          videoUrl: data.videoUrl,
+        }),
+      });
+      if (!jobResponse.ok) {
+        const body = await jobResponse.json().catch(() => ({}));
+        throw new Error(body.error || "Failed to queue the processing job");
       }
     } catch (e: any) {
       alert(e.message || "Upload failed");
@@ -158,7 +164,7 @@ export function CourseUpload({
           <h3 className="font-medium mb-2">Upload Audio</h3>
           <input
             type="file"
-            accept="audio/*"
+            accept=".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/mp4"
             className="hidden"
             id="upload-audio"
             onChange={(e) => handleFileUpload(e, "audio")}
@@ -188,7 +194,7 @@ export function CourseUpload({
           <h3 className="font-medium mb-2">Upload Video</h3>
           <input
             type="file"
-            accept="video/*"
+            accept=".mp4,.mov,.mkv,.webm,video/mp4,video/quicktime,video/webm"
             className="hidden"
             id="upload-video"
             onChange={(e) => handleFileUpload(e, "video")}

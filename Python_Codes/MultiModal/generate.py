@@ -117,7 +117,7 @@ class LectureDocumentGenerator:
             segment_data.get('audio_transcript') or 
             segment_data.get('text') or 
             ''
-        )
+        ).strip()
         
         # If not in segment_data, try to get from loaded audio transcripts
         if not lecture_audio_text and self.audio_transcripts:
@@ -137,8 +137,12 @@ class LectureDocumentGenerator:
                     print(f"  ✓ Found transcript using key: {key}")
                     break
         
-        # Get video text if available
-        video_text = ""
+        # Use on-screen OCR text when no audio transcript is available.  This
+        # makes locally processed slide/whiteboard lectures useful even when
+        # ASR is intentionally disabled or temporarily unavailable.
+        video_text = segment_data.get('lecture_video_text') or segment_data.get('video_text') or ''
+        if not lecture_audio_text and video_text:
+            lecture_audio_text = video_text
         
         segment_id = segment_data.get('segment_id', 0)
         timestamp_start = segment_data.get('timestamp_start', segment_id * 10)
@@ -230,6 +234,13 @@ Summary:"""
         else:
             print(f"Audio content included: NO ✗")
         
+        # Local smoke runs may intentionally have no remote-model credentials.
+        # Use the deterministic fallback directly instead of waiting for a
+        # network/authentication failure; production keeps the LLM default.
+        if os.getenv("PIPELINE_DISABLE_LLM", "false").lower() in {"1", "true", "yes"}:
+            print("Skipping remote LLM call (offline smoke mode).")
+            return self._create_fallback_summary(segment_data, lecture_audio_text, book_refs)
+
         # Call LLM API
         try:
             print(f"Calling LLM API...")

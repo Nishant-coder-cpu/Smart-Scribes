@@ -106,7 +106,7 @@ export interface ChatMessage {
 export interface LectureProcessing {
   id: string
   lectureId: string
-  status: 'uploading' | 'processing' | 'generating' | 'completed'
+  status: 'pending' | 'uploading' | 'processing' | 'generating' | 'completed' | 'failed'
   audioFile?: string
   videoFile?: string
   createdAt: string

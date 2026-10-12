@@ -1,10 +1,11 @@
 import cv2
 import torch
-from transformers import AutoProcessor, AutoModelForVision2Seq, BlipProcessor, BlipForConditionalGeneration, TrOCRProcessor, VisionEncoderDecoderModel
+from transformers import BlipProcessor, BlipForConditionalGeneration, TrOCRProcessor, VisionEncoderDecoderModel
 from sentence_transformers import SentenceTransformer
 from PIL import Image
 import numpy as np
 import re
+import os
 from pathlib import Path
 import easyocr 
 
@@ -33,27 +34,34 @@ class VideoTextExtractor:
         print("Loading Text Detector (easyocr)...")
         self.text_detector = easyocr.Reader(['en'], gpu=use_gpu)
 
-        print("Loading HTR model (microsoft/trocr-large-handwritten)...")
-        # Force safetensors to avoid PyTorch 2.6 requirement
+        # Base variants fit alongside EasyOCR, Whisper and the captioning model
+        # on the project's 6 GB RTX 3050. Larger models remain opt-in.
+        self.htr_model_name = os.getenv("TROCR_MODEL", "microsoft/trocr-base-handwritten")
+        self.caption_model_name = os.getenv("BLIP_MODEL", "Salesforce/blip-image-captioning-base")
+        self.captioning_enabled = os.getenv("PIPELINE_DISABLE_CAPTIONING", "false").lower() not in {"1", "true", "yes"}
+
+        print(f"Loading HTR model ({self.htr_model_name})...")
         self.htr_processor = TrOCRProcessor.from_pretrained(
-            "microsoft/trocr-large-handwritten",
-            use_safetensors=True
+            self.htr_model_name
         )
         self.htr_model = VisionEncoderDecoderModel.from_pretrained(
-            "microsoft/trocr-large-handwritten",
-            use_safetensors=True
+            self.htr_model_name,
+            use_safetensors=False
         ).to(self.device)
 
-        print("Loading Image Captioning model (Salesforce/blip-image-captioning-large)...")
-        # BLIP models also support safetensors
-        self.caption_processor = BlipProcessor.from_pretrained(
-            "Salesforce/blip-image-captioning-large",
-            use_safetensors=True
-        )
-        self.caption_model = BlipForConditionalGeneration.from_pretrained(
-            "Salesforce/blip-image-captioning-large",
-            use_safetensors=True
-        ).to(self.device)
+        self.caption_processor = None
+        self.caption_model = None
+        if self.captioning_enabled:
+            print(f"Loading Image Captioning model ({self.caption_model_name})...")
+            self.caption_processor = BlipProcessor.from_pretrained(
+                self.caption_model_name
+            )
+            self.caption_model = BlipForConditionalGeneration.from_pretrained(
+                self.caption_model_name,
+                use_safetensors=False
+            ).to(self.device)
+        else:
+            print("Image captioning disabled for this local smoke run.")
 
         print("Loading NLP embedding model (all-MiniLM-L6-v2)...")
         self.embedding_model = SentenceTransformer("all-MiniLM-L6-v2", device=self.device)
@@ -88,12 +96,13 @@ class VideoTextExtractor:
                         
                     if text and len(text) > 2: # Filter out small noise
                         unique_text_fragments.add(text)
-            caption_inputs = self.caption_processor(pil_image, return_tensors="pt").to(self.device)
-            with torch.no_grad():
-                caption_ids = self.caption_model.generate(**caption_inputs, max_length=75)
-            caption = self.caption_processor.batch_decode(caption_ids, skip_special_tokens=True)[0].strip()
-            if caption and len(caption) > 5:
-                unique_image_captions.add(caption)
+            if self.caption_model is not None and self.caption_processor is not None:
+                caption_inputs = self.caption_processor(pil_image, return_tensors="pt").to(self.device)
+                with torch.no_grad():
+                    caption_ids = self.caption_model.generate(**caption_inputs, max_length=75)
+                caption = self.caption_processor.batch_decode(caption_ids, skip_special_tokens=True)[0].strip()
+                if caption and len(caption) > 5:
+                    unique_image_captions.add(caption)
                     
                 
         return list(unique_text_fragments), list(unique_image_captions)

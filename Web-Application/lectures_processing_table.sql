@@ -2,7 +2,11 @@
 CREATE TABLE public.lectures_processing (
   id TEXT NOT NULL,
   lecture_id TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('uploading', 'processing', 'generating', 'completed')),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'uploading', 'processing', 'generating', 'completed', 'failed')),
+  stage TEXT,
+  progress INTEGER NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
+  error TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
   audio_file TEXT,
   video_file TEXT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),

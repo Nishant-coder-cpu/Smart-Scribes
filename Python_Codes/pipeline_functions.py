@@ -247,6 +247,11 @@ def combine_lecture_data(analysis_file, all_data_file, lecture_book_matches_file
 
 
 def clean_directory(directory_path):
+    # First-run pipelines do not have derived artifact folders yet.  Treat a
+    # missing directory as an empty directory instead of failing the run.
+    if not os.path.exists(directory_path):
+        os.makedirs(directory_path, exist_ok=True)
+        return
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
         try:

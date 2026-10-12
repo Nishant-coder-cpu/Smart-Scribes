@@ -23,8 +23,9 @@ def get_course_lectures(bucket_name, max_files=2):
     prefix = "courses/"
     blobs = storage_client.list_blobs(bucket_name, prefix=prefix)
 
-    # Dictionary to count files under each lecture folder
-    lecture_file_count = defaultdict(int)
+    # Track only the two source media files. Generated assets must not make a
+    # lecture disappear from a worker scan.
+    lecture_media = defaultdict(set)
 
     for blob in blobs:
         parts = blob.name.split('/')
@@ -32,10 +33,18 @@ def get_course_lectures(bucket_name, max_files=2):
         if len(parts) >= 4 and parts[0] == "courses" and parts[2] == "lectures":
             course_name = parts[1]
             lecture_id = parts[3]
-            lecture_file_count[(course_name, lecture_id)] += 1
+            filename = parts[4].lower() if len(parts) > 4 else ""
+            if filename.startswith("audio."):
+                lecture_media[(course_name, lecture_id)].add("audio")
+            elif filename.startswith("video."):
+                lecture_media[(course_name, lecture_id)].add("video")
 
-    # Filter to only include lectures that have exactly `max_files` files
-    result = [(course, lecture) for (course, lecture), count in lecture_file_count.items() if count == max_files]
+    # Retain max_files for API compatibility, but avoid brittle total counts.
+    result = [
+        (course, lecture)
+        for (course, lecture), media in lecture_media.items()
+        if {"audio", "video"}.issubset(media)
+    ]
 
     print(result)
     return result
@@ -69,14 +78,15 @@ def download_lecture_files(bucket_name, course_name, lecture_id):
         if file_path.endswith("/"):
             continue
 
-        if file_path.endswith(".mp3"):
-            filename = "audio.mp3"
+        filename_lower = file_path.lower()
+        if filename_lower.endswith((".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg")) and "/audio." in filename_lower:
+            filename = f"audio{os.path.splitext(file_path)[1].lower()}"
             local_path = os.path.join("audio_full", filename)
             print(f"Downloading audio: {file_path} -> {local_path}")
             blob.download_to_filename(local_path)
 
-        elif file_path.endswith(".mp4"):
-            filename = "video.mp4"
+        elif filename_lower.endswith((".mp4", ".mov", ".mkv", ".webm")) and "/video." in filename_lower:
+            filename = f"video{os.path.splitext(file_path)[1].lower()}"
             local_path = os.path.join("video_full", filename)
             print(f"Downloading video: {file_path} -> {local_path}")
             blob.download_to_filename(local_path)

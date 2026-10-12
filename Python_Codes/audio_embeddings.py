@@ -18,15 +18,20 @@ warnings.filterwarnings("ignore")
 class AudioVectorizer:
     def __init__(self, hf_asr_model="openai/whisper-base"): 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.asr_enabled = os.getenv("PIPELINE_DISABLE_ASR", "false").lower() not in {"1", "true", "yes"}
         print(f"Using device: {self.device}")
 
-        print(f"Loading HF ASR model ({hf_asr_model})...")
-        self.transcription_model = pipeline(
+        self.transcription_model = None
+        if self.asr_enabled:
+            print(f"Loading HF ASR model ({hf_asr_model})...")
+            self.transcription_model = pipeline(
                 "automatic-speech-recognition",
                 model=hf_asr_model,
                 device=self.device
             )
-        print("HF ASR (Whisper) model loaded successfully.")
+            print("HF ASR (Whisper) model loaded successfully.")
+        else:
+            print("ASR disabled for this local smoke run; transcript text will be empty.")
 
         print("Loading text embedding model (all-MiniLM-L6-v2)...")
         self.embedding_model = SentenceTransformer("all-MiniLM-L6-v2", device=self.device)
@@ -118,12 +123,15 @@ class AudioVectorizer:
     
     def get_transcript_embedding(self, audio_segment, sample_rate):
         text = ""    
-        print("       Transcribing segment with Whisper...")
-        result = self.transcription_model(
+        if self.transcription_model is not None:
+            print("       Transcribing segment with Whisper...")
+            result = self.transcription_model(
                 audio_segment, 
                 generate_kwargs={"task": "transcribe"}
-        )       
-        text = result["text"].strip().upper()    
+            )
+            text = result["text"].strip().upper()
+        else:
+            print("       Skipping transcription (offline smoke mode)...")
         print(f"         Transcription: '{text}'")
         print(f"         Generating text embedding...")
         embedding = self.embedding_model.encode(text)
