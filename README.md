@@ -25,7 +25,7 @@
 <div align="center">
 
 [Demo video ▶️](https://youtu.be/DzG_FQJkbAA?si=_FozVdJELSWYFovM) ·
-[Slides 📋](https://drive.google.com/file/d/1ddnYoN5SRydPX6gg-2T6K_LbyNhOXlyg/view?usp=drive_link) ·
+[Slides 📋](https://drive.google.com/file/d/1qCfUEhvyrWYzWpPNcaRTe1H38lkaIORh/view?usp=sharing) ·
 [Install guide 🛠️](https://docs.google.com/document/d/12SVAEacqcgggpBd9ZEuPtTzkk854s6yFGcVeqSDfwHc/edit?usp=drive_link)
 
 </div>
