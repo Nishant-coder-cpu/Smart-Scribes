@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isAllowedMediaPath, publicObjectUrl, safePathSegment } from "../gcp";
+import { isAllowedMediaPath, parseByteRange, publicObjectUrl, safePathSegment } from "../gcp";
 import { parseLectureNumber } from "../jobs";
 import { makeLectureId } from "../ids";
 
@@ -29,6 +29,22 @@ describe("publicObjectUrl", () => {
     expect(publicObjectUrl("b", "courses/a b/c#d.mp4")).toBe(
       "https://storage.googleapis.com/b/courses/a%20b/c%23d.mp4"
     );
+  });
+});
+
+describe("parseByteRange", () => {
+  it("parses bounded, open-ended, and suffix ranges", () => {
+    expect(parseByteRange("bytes=2-5", 10)).toEqual({ start: 2, end: 5 });
+    expect(parseByteRange("bytes=8-", 10)).toEqual({ start: 8, end: 9 });
+    expect(parseByteRange("bytes=-4", 10)).toEqual({ start: 6, end: 9 });
+  });
+
+  it("clamps ranges at the end of the object and rejects invalid ranges", () => {
+    expect(parseByteRange("bytes=5-20", 10)).toEqual({ start: 5, end: 9 });
+    expect(parseByteRange("bytes=10-", 10)).toBe("invalid");
+    expect(parseByteRange("bytes=0-1,4-5", 10)).toBe("invalid");
+    expect(parseByteRange("bytes=-0", 10)).toBe("invalid");
+    expect(parseByteRange(null, 10)).toBeNull();
   });
 });
 

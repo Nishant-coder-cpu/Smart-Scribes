@@ -6,6 +6,18 @@ import { getGcpProjectId, loadGcpCredentials } from "./gcp";
 
 export type LLMProvider = 'aws' | 'gemini';
 
+export function getGeminiModel(configuredModel = process.env.GEMINI_MODEL): string {
+  return configuredModel?.trim() || 'gemini-2.5-flash';
+}
+
+export function shouldUseVertexAI(apiKey: string | undefined, transport = process.env.GEMINI_TRANSPORT): boolean {
+  const selectedTransport = transport?.trim().toLowerCase();
+  if (selectedTransport && selectedTransport !== 'api-key' && selectedTransport !== 'vertex') {
+    throw new Error("GEMINI_TRANSPORT must be 'api-key' or 'vertex'.");
+  }
+  return selectedTransport === 'vertex' || (selectedTransport !== 'api-key' && !apiKey);
+}
+
 /**
  * Build a chat model. An explicit `provider` argument wins; otherwise
  * DEFAULT_LLM_PROVIDER is used, falling back to Gemini.
@@ -14,18 +26,34 @@ export function getLLM(provider?: LLMProvider, temperature: number = 0.7): BaseC
   const selectedProvider = provider || (process.env.DEFAULT_LLM_PROVIDER as LLMProvider) || 'gemini';
 
   if (selectedProvider === 'gemini') {
-    const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+    const model = getGeminiModel();
+    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+    const useVertexAI = shouldUseVertexAI(apiKey);
 
-    // Use Vertex AI when service account credentials are configured; if they
-    // can't be loaded, fall back to an API key below.
+    if (!useVertexAI && !apiKey) {
+      throw new Error("GEMINI_TRANSPORT=api-key requires GEMINI_API_KEY or GOOGLE_API_KEY.");
+    }
+    if (!useVertexAI && apiKey) {
+      return new ChatGoogleGenerativeAI({
+        apiKey,
+        model,
+        temperature,
+      });
+    }
+
+    // Storage service-account credentials should not force Vertex AI when a
+    // Gemini API key is configured. Set GEMINI_TRANSPORT=vertex to opt in.
     let credentials: Record<string, any> | null = null;
     try {
       credentials = loadGcpCredentials();
     } catch (err) {
-      console.warn("Could not load GCP credentials for Vertex AI, trying GEMINI_API_KEY:", err);
+      console.warn("Could not load GCP credentials for Vertex AI:", err);
     }
     if (credentials) {
       return new ChatVertexAI({
+        // Suppress @langchain/google-common's GOOGLE_API_KEY fallback so the
+        // supplied service-account credentials are actually used.
+        apiKey: "",
         model,
         location: process.env.GCP_LOCATION || "us-central1",
         temperature,
@@ -36,15 +64,7 @@ export function getLLM(provider?: LLMProvider, temperature: number = 0.7): BaseC
       });
     }
 
-    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-    if (!apiKey) {
-      throw new Error("No Gemini credentials: set GOOGLE_APPLICATION_CREDENTIALS(_JSON) or GEMINI_API_KEY.");
-    }
-    return new ChatGoogleGenerativeAI({
-      apiKey,
-      model,
-      temperature,
-    });
+    throw new Error("Vertex AI was selected, but no valid Google Cloud service-account credentials were found.");
   }
 
   // AWS Bedrock

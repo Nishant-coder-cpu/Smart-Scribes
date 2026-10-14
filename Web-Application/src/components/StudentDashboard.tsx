@@ -39,6 +39,7 @@ export function StudentDashboard({ onLogout }: StudentDashboardProps) {
     initialSession.mode || 'lectures'
   );
   const [qnaDialogOpen, setQnaDialogOpen] = useState(initialSession.dialog === 'qna');
+  const [qnaInitialTopic, setQnaInitialTopic] = useState<string | null>(null);
   const [doubtsDialogOpen, setDoubtsDialogOpen] = useState(initialSession.dialog === 'doubts');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
@@ -145,6 +146,11 @@ export function StudentDashboard({ onLogout }: StudentDashboardProps) {
       { role: 'student', lectureId, courseId: selectedCourse, mode: currentMode },
       { pushHistory: true }
     );
+  };
+
+  const handlePracticeConcept = (topic: string) => {
+    setQnaInitialTopic(topic);
+    setQnaDialogOpen(true);
   };
 
   // Load lecture content when lecture changes
@@ -323,7 +329,7 @@ export function StudentDashboard({ onLogout }: StudentDashboardProps) {
                 </div>
               </div>
             )}
-            {currentMode === 'planning' && <PlanningMode />}
+            {currentMode === 'planning' && <PlanningMode onPracticeConcept={handlePracticeConcept} />}
             {currentMode === 'projects' && <ProjectSection />}
           </div>
 
@@ -365,8 +371,12 @@ export function StudentDashboard({ onLogout }: StudentDashboardProps) {
       {/* QnA Dialog */}
       <QnAGenerator 
         open={qnaDialogOpen} 
-        onClose={() => setQnaDialogOpen(false)} 
+        onClose={() => {
+          setQnaDialogOpen(false);
+          setQnaInitialTopic(null);
+        }}
         lectureContent={currentLectureText} 
+        initialTopic={qnaInitialTopic}
       />
 
       {/* Student Doubts Dialog/Page */}

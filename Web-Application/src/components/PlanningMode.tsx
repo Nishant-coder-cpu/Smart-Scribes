@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Lightbulb,
@@ -21,6 +21,12 @@ import { Input } from './ui/input';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 
+interface PlanningModeProps {
+  onPracticeConcept: (topic: string) => void;
+}
+
+const MILESTONES_STORAGE_KEY = 'smart-scribes:planning-milestones';
+
 interface ConceptNode {
   id: string;
   name: string;
@@ -35,11 +41,37 @@ interface ConceptNode {
   rating: number;
 }
 
-export function PlanningMode() {
+export function PlanningMode({ onPracticeConcept }: PlanningModeProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedConceptId, setSelectedConceptId] = useState<string>('c1');
   const [selectedTrack, setSelectedTrack] = useState<'ml-systems' | 'distributed' | 'algorithms'>('ml-systems');
   const [completedMilestones, setCompletedMilestones] = useState<Set<string>>(new Set(['m1']));
+  const [milestonesLoaded, setMilestonesLoaded] = useState(false);
+
+  useEffect(() => {
+    try {
+      const savedMilestones = window.localStorage.getItem(MILESTONES_STORAGE_KEY);
+      if (savedMilestones) {
+        const parsedMilestones: unknown = JSON.parse(savedMilestones);
+        if (Array.isArray(parsedMilestones)) {
+          setCompletedMilestones(new Set(parsedMilestones.filter((id): id is string => typeof id === 'string')));
+        }
+      }
+    } catch (error) {
+      console.warn('Could not restore planning milestones:', error);
+    } finally {
+      setMilestonesLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!milestonesLoaded) return;
+    try {
+      window.localStorage.setItem(MILESTONES_STORAGE_KEY, JSON.stringify(Array.from(completedMilestones)));
+    } catch (error) {
+      console.warn('Could not save planning milestones:', error);
+    }
+  }, [completedMilestones, milestonesLoaded]);
 
   const concepts: ConceptNode[] = [
     {
@@ -465,11 +497,9 @@ export function PlanningMode() {
             <div className="pt-3 border-t border-slate-100">
               <Button
                 className="w-full rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold h-10 shadow-sm"
-                onClick={() => {
-                  alert(`Concept "${selectedConcept.name}" added to study planner! Open AI Tutor or QnA Generator to quiz yourself on this topic.`);
-                }}
+                onClick={() => onPracticeConcept(selectedConcept.name)}
               >
-                <span>Study Concept Roadmap</span>
+                <span>Practice This Concept</span>
                 <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
               </Button>
             </div>
@@ -528,16 +558,25 @@ export function PlanningMode() {
                     return (
                       <div
                         key={m.id}
+                        role="checkbox"
+                        aria-checked={isDone}
+                        tabIndex={0}
                         onClick={() => toggleMilestone(m.id)}
-                        className={`p-3.5 rounded-xl border flex items-center justify-between cursor-pointer transition-all ${
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            toggleMilestone(m.id);
+                          }
+                        }}
+                        className={`p-3.5 rounded-xl border flex items-center justify-between cursor-pointer transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                           isDone
                             ? 'bg-emerald-50/50 border-emerald-200 text-slate-900'
                             : 'bg-slate-50/60 border-slate-200 hover:border-blue-300'
                         }`}
                       >
                         <div className="flex items-center gap-3">
-                          <button
-                            type="button"
+                          <span
+                            aria-hidden="true"
                             className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 transition-colors ${
                               isDone ? 'text-emerald-600' : 'text-slate-400 hover:text-slate-600'
                             }`}
@@ -547,7 +586,7 @@ export function PlanningMode() {
                             ) : (
                               <Circle className="w-4 h-4" />
                             )}
-                          </button>
+                          </span>
                           <div>
                             <p className={`text-xs sm:text-sm font-medium ${isDone ? 'line-through text-slate-500' : 'text-slate-800'}`}>
                               {m.title}

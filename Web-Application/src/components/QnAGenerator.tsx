@@ -42,9 +42,10 @@ interface QnAGeneratorProps {
   onClose: () => void;
   /** Plain-text lecture notes; used to suggest topics and ground questions. */
   lectureContent?: string | null;
+  initialTopic?: string | null;
 }
 
-export function QnAGenerator({ open, onClose, lectureContent }: QnAGeneratorProps) {
+export function QnAGenerator({ open, onClose, lectureContent, initialTopic }: QnAGeneratorProps) {
   const [topics, setTopics] = useState<string[]>([]);
   const [lectureTopics, setLectureTopics] = useState<string[]>([]);
   const [lectureTopicsFor, setLectureTopicsFor] = useState<string | null>(null);
@@ -70,6 +71,18 @@ export function QnAGenerator({ open, onClose, lectureContent }: QnAGeneratorProp
     'Dijkstra Shortest Path',
     'Relational Normalization',
   ];
+
+  useEffect(() => {
+    if (!open || !initialTopic) return;
+    setTopics((currentTopics) =>
+      currentTopics.includes(initialTopic) ? currentTopics : [...currentTopics, initialTopic]
+    );
+    setQuizGenerated(false);
+    setQuestions([]);
+    setUserAnswers({});
+    setShowSolutions(false);
+    setError(null);
+  }, [open, initialTopic]);
 
   // Suggest topics from the open lecture (once per lecture) via /api/qna/topics.
   useEffect(() => {

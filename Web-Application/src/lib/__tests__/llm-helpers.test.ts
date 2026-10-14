@@ -1,9 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { classifySearchPrefix } from "../langchain-agent";
-import { messageText } from "../llm";
+import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
+import { getGeminiModel, getLLM, messageText, shouldUseVertexAI } from "../llm";
 import { normalizeMathDelimiters } from "../markdown-math";
 import { parseQuestionsFromResponse } from "../qna-generator";
 import { lectureToPlainText } from "../lecture-text";
+
+afterEach(() => vi.unstubAllEnvs());
 
 describe("classifySearchPrefix", () => {
   it("waits while the reply could still be the search sentinel", () => {
@@ -25,6 +28,38 @@ describe("messageText", () => {
     expect(
       messageText({ content: [{ type: "reasoning", reasoning: "..." }, { type: "text", text: "answer" }] })
     ).toBe("answer");
+  });
+});
+
+describe("shouldUseVertexAI", () => {
+  it("prefers the Gemini API key unless Vertex is explicitly selected", () => {
+    expect(shouldUseVertexAI("test-api-key", undefined)).toBe(false);
+    expect(shouldUseVertexAI("test-api-key", "vertex")).toBe(true);
+    expect(shouldUseVertexAI(undefined, undefined)).toBe(true);
+    expect(shouldUseVertexAI("test-api-key", "api-key")).toBe(false);
+  });
+
+  it("rejects unsupported Gemini transports", () => {
+    expect(() => shouldUseVertexAI("test-api-key", "unknown")).toThrow(
+      "GEMINI_TRANSPORT must be 'api-key' or 'vertex'."
+    );
+  });
+
+  it("does not let storage credentials override a configured Gemini API key", () => {
+    vi.stubEnv("GEMINI_API_KEY", "test-api-key");
+    vi.stubEnv("GEMINI_MODEL", "gemini-3.8-flash");
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "storage-service-account.json");
+    vi.stubEnv("GEMINI_TRANSPORT", "");
+
+    expect(getLLM("gemini")).toBeInstanceOf(ChatGoogleGenerativeAI);
+  });
+});
+
+describe("getGeminiModel", () => {
+  it("defaults to Gemini 2.5 Flash and keeps explicit model configuration", () => {
+    expect(getGeminiModel(undefined)).toBe("gemini-2.5-flash");
+    expect(getGeminiModel("gemini-3.8-flash")).toBe("gemini-3.8-flash");
+    expect(getGeminiModel("  gemini-2.5-flash  ")).toBe("gemini-2.5-flash");
   });
 });
 

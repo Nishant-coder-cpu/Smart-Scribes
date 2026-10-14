@@ -53,6 +53,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       uploadUrl,
+      bucketName: bucket.name,
       destinationPath,
       pathPrefix: basePath,
     });

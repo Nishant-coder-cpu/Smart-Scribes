@@ -93,7 +93,12 @@ export function CourseUpload({
           const e = await initRes.json().catch(() => ({} as any));
           throw new Error((e as any).error || 'Failed to initialize upload');
         }
-        return initRes.json() as Promise<{ uploadUrl: string; destinationPath: string; pathPrefix: string }>
+        return initRes.json() as Promise<{
+          uploadUrl: string;
+          bucketName: string;
+          destinationPath: string;
+          pathPrefix: string;
+        }>;
       }
 
       const [audioInit, videoInit] = await Promise.all([
@@ -109,11 +114,10 @@ export function CourseUpload({
         putFileWithProgress(videoInit.uploadUrl, videoFile, (n) => { loaded.video = n; report(); }),
       ]);
 
-      const bucket = process.env.NEXT_PUBLIC_GCS_BUCKET_NAME || 'smart-scribes';
-      const toUrl = (p: string) =>
+      const toUrl = (bucket: string, p: string) =>
         `https://storage.googleapis.com/${bucket}/${p.split('/').map(encodeURIComponent).join('/')}`;
-      const audioUrl = toUrl(audioInit.destinationPath);
-      const videoUrl = toUrl(videoInit.destinationPath);
+      const audioUrl = toUrl(audioInit.bucketName, audioInit.destinationPath);
+      const videoUrl = toUrl(videoInit.bucketName, videoInit.destinationPath);
 
       // Queue the job for the Python worker (it only picks up 'pending' jobs).
       // The API also creates the lecture row if it does not exist yet.

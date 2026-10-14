@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getBucketName, isAllowedMediaPath, publicObjectUrl, signedReadUrl } from "@/lib/gcp";
+import { Readable } from "node:stream";
+import { getBucketName, getStorage, isAllowedMediaPath, parseByteRange, signedReadUrl } from "@/lib/gcp";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,10 +33,42 @@ export async function GET(request: NextRequest) {
   try {
     target = await signedReadUrl(bucketName, path, SIGNED_URL_TTL_MS);
   } catch (error) {
-    // Credentials that can't sign (e.g. no private key): fall back to the
-    // public URL, which still works while the bucket is publicly readable.
-    console.error("Could not sign media URL, falling back to public URL:", error);
-    target = publicObjectUrl(bucketName, path);
+    // Some service accounts can read objects but cannot sign URLs. Stream the
+    // object through this route in that case instead of exposing a private URL.
+    console.error("Could not sign media URL; streaming from Cloud Storage:", error);
+    try {
+      const file = getStorage().bucket(bucketName).file(path);
+      const [metadata] = await file.getMetadata();
+      const size = Number(metadata.size);
+      const byteRange = parseByteRange(request.headers.get("range"), size);
+
+      if (byteRange === "invalid") {
+        return new NextResponse(null, {
+          status: 416,
+          headers: { "Content-Range": `bytes */${size}`, "Accept-Ranges": "bytes" },
+        });
+      }
+
+      const headers = new Headers({
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "private, max-age=3600",
+        "Content-Length": String(byteRange ? byteRange.end - byteRange.start + 1 : size),
+        "Content-Type": metadata.contentType || "application/octet-stream",
+      });
+      const status = byteRange ? 206 : 200;
+      if (byteRange) {
+        headers.set("Content-Range", `bytes ${byteRange.start}-${byteRange.end}/${size}`);
+      }
+
+      const stream = file.createReadStream(byteRange || undefined);
+      return new Response(Readable.toWeb(stream) as ReadableStream<Uint8Array>, { status, headers });
+    } catch (streamError: any) {
+      console.error("Could not stream media from Cloud Storage:", streamError);
+      return NextResponse.json(
+        { error: streamError?.message || "Unable to read media from Cloud Storage" },
+        { status: 502 }
+      );
+    }
   }
 
   const response = NextResponse.redirect(target, 302);

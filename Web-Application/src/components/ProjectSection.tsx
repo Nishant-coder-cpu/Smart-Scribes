@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   FolderKanban,
@@ -37,6 +37,8 @@ interface ProjectItem {
   milestones: { id: string; text: string; done: boolean }[];
   resources: { name: string; type: string; url: string }[];
 }
+
+const PROJECTS_STORAGE_KEY = 'smart-scribes:project-planner';
 
 export function ProjectSection() {
   const [projects, setProjects] = useState<ProjectItem[]>([
@@ -113,6 +115,30 @@ export function ProjectSection() {
       ],
     },
   ]);
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
+
+  useEffect(() => {
+    try {
+      const savedProjects = window.localStorage.getItem(PROJECTS_STORAGE_KEY);
+      if (savedProjects) {
+        const parsedProjects: unknown = JSON.parse(savedProjects);
+        if (Array.isArray(parsedProjects)) setProjects(parsedProjects as ProjectItem[]);
+      }
+    } catch (error) {
+      console.warn('Could not restore project planner data:', error);
+    } finally {
+      setProjectsLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!projectsLoaded) return;
+    try {
+      window.localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(projects));
+    } catch (error) {
+      console.warn('Could not save project planner data:', error);
+    }
+  }, [projects, projectsLoaded]);
 
   // Modal States
   const [activeAiModal, setActiveAiModal] = useState<ProjectItem | null>(null);
@@ -179,7 +205,7 @@ export function ProjectSection() {
       ],
     };
 
-    setProjects([createdProject, ...projects]);
+    setProjects((currentProjects) => [createdProject, ...currentProjects]);
     setIsGenerateModalOpen(false);
     setNewTitle('');
     setNewDesc('');
@@ -475,15 +501,21 @@ export function ProjectSection() {
                         <h4 className="text-xs sm:text-sm font-semibold text-slate-800">{res.name}</h4>
                         <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">{res.type}</span>
                       </div>
-                      <a
-                        href={res.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="p-2 rounded-lg text-blue-600 hover:bg-blue-50 text-xs font-semibold flex items-center gap-1"
-                      >
-                        <span>Open</span>
-                        <ExternalLink className="w-3.5 h-3.5" />
-                      </a>
+                      {/^https?:\/\//i.test(res.url) ? (
+                        <a
+                          href={res.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="p-2 rounded-lg text-blue-600 hover:bg-blue-50 text-xs font-semibold flex items-center gap-1"
+                        >
+                          <span>Open</span>
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </a>
+                      ) : (
+                        <span className="p-2 text-xs text-slate-400" aria-disabled="true">
+                          Unavailable
+                        </span>
+                      )}
                     </div>
                   ))}
                 </div>

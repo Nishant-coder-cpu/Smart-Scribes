@@ -113,6 +113,35 @@ export function isAllowedMediaPath(path: unknown): path is string {
   );
 }
 
+export function parseByteRange(
+  rangeHeader: string | null,
+  size: number
+): { start: number; end: number } | "invalid" | null {
+  if (!rangeHeader) return null;
+  if (!Number.isSafeInteger(size) || size <= 0) return "invalid";
+
+  const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
+  if (!match || (!match[1] && !match[2])) return "invalid";
+
+  let start: number;
+  let end: number;
+  if (!match[1]) {
+    const suffixLength = Number(match[2]);
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) return "invalid";
+    start = Math.max(size - suffixLength, 0);
+    end = size - 1;
+  } else {
+    start = Number(match[1]);
+    end = match[2] ? Number(match[2]) : size - 1;
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start >= size || end < start) {
+      return "invalid";
+    }
+    end = Math.min(end, size - 1);
+  }
+
+  return { start, end };
+}
+
 /** V4 signed URL granting temporary read access to one object. */
 export async function signedReadUrl(bucketName: string, objectPath: string, ttlMs: number): Promise<string> {
   const [url] = await getStorage()

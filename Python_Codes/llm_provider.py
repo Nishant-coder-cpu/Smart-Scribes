@@ -206,8 +206,6 @@ def gemini_generate(
     from google.genai import types
 
     model_name = model_name or os.getenv("GEMINI_MODEL_FAST", "gemini-2.5-flash")
-    if model_name == "gemini-3.8-flash":
-        model_name = "gemini-2.5-flash"
     client = _get_gemini_client()
     # max_tokens is deliberately not forwarded: Gemini thinking models count "thinking"
     # tokens against max_output_tokens, so the small Bedrock-oriented limits

@@ -23,6 +23,26 @@ def test_bedrock_tiers_use_configured_model(monkeypatch):
     assert seen["model"] == "openai.gpt-oss-20b-1:0"
 
 
+def test_gemini_fast_tier_keeps_configured_flash_model(monkeypatch):
+    from types import SimpleNamespace
+
+    seen = {}
+
+    class FakeModels:
+        def generate_content(self, **kwargs):
+            seen.update(kwargs)
+            return SimpleNamespace(text="ok", candidates=[])
+
+    class FakeClient:
+        models = FakeModels()
+
+    monkeypatch.setattr(llm_provider, "_get_gemini_client", lambda: FakeClient())
+    monkeypatch.setenv("GEMINI_MODEL_FAST", "gemini-2.5-flash")
+
+    assert llm_provider.generate_fast("hi", provider="gemini") == "ok"
+    assert seen["model"] == "gemini-2.5-flash"
+
+
 def test_prepare_record_keeps_only_table_columns():
     record = {
         "id": "ic112-l1",
