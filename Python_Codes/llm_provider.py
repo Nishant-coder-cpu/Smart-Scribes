@@ -205,7 +205,9 @@ def gemini_generate(
     """Send a single-turn text prompt to Google Gemini and return the text."""
     from google.genai import types
 
-    model_name = model_name or os.getenv("GEMINI_MODEL_FAST", "gemini-3.8-flash")
+    model_name = model_name or os.getenv("GEMINI_MODEL_FAST", "gemini-2.5-flash")
+    if model_name == "gemini-3.8-flash":
+        model_name = "gemini-2.5-flash"
     client = _get_gemini_client()
     # max_tokens is deliberately not forwarded: Gemini thinking models count "thinking"
     # tokens against max_output_tokens, so the small Bedrock-oriented limits
@@ -274,7 +276,7 @@ def generate_fast(prompt: str, **kwargs) -> str:
     if provider == "aws":
         kwargs.setdefault("model", os.getenv("BEDROCK_MODEL_FAST") or os.getenv("BEDROCK_MODEL_ID") or "anthropic.claude-3-haiku-20240307-v1:0")
     else:
-        kwargs.setdefault("model", os.getenv("GEMINI_MODEL_FAST", "gemini-3.8-flash"))
+        kwargs.setdefault("model", os.getenv("GEMINI_MODEL_FAST", "gemini-2.5-flash"))
     return generate(prompt, provider=provider, **kwargs)
 
 
@@ -284,7 +286,10 @@ def generate_pro(prompt: str, **kwargs) -> str:
     if provider == "aws":
         kwargs.setdefault("model", os.getenv("BEDROCK_MODEL_PRO") or os.getenv("BEDROCK_MODEL_ID") or "anthropic.claude-3-sonnet-20240229-v1:0")
     else:
-        kwargs.setdefault("model", os.getenv("GEMINI_MODEL_PRO", "gemini-3.8-flash"))
+        model = os.getenv("GEMINI_MODEL_PRO", "gemini-2.5-pro")
+        if model == "gemini-3.8-flash":
+            model = "gemini-2.5-pro"
+        kwargs.setdefault("model", model)
     return generate(prompt, provider=provider, **kwargs)
 
 

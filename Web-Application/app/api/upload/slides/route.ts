@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
-import { createClient } from "@/utils/supabase/server";
+import { createAdminClient } from "@/utils/supabase/server";
 import { getBucketName, getStorage, publicObjectUrl, safePathSegment } from "@/lib/gcp";
 import { makeLectureId } from "@/lib/ids";
 import { parseLectureNumber } from "@/lib/jobs";
@@ -55,7 +55,7 @@ export async function POST(request: NextRequest) {
     // Skipped (not an error) when the lecture row does not exist yet.
     let recorded = false;
     if (lectureNumber) {
-      const supabase = createClient();
+      const supabase = createAdminClient();
       const lectureId = makeLectureId(rawCourseId, lectureNumber);
       const { data: lecture } = await supabase
         .from("lectures")

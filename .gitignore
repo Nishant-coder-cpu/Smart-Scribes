@@ -16,6 +16,12 @@ __pycache__/
 *.tsbuildinfo
 .eslintcache
 
+# Environment files
+.env
+.env.local
+.env*.local
+*.env
+
 # GCP service-account keys (prevent GitHub Secret Scanning rejection)
 *-key.json
 smart-scribe-*.json

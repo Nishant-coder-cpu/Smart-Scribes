@@ -8,6 +8,14 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).with_name(".env"))
 
+# Ensure GOOGLE_APPLICATION_CREDENTIALS resolves to an absolute path if specified relatively
+if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+    cred_path = Path(os.environ["GOOGLE_APPLICATION_CREDENTIALS"])
+    if not cred_path.is_absolute():
+        resolved = (Path(__file__).parent / cred_path).resolve()
+        if resolved.exists():
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(resolved)
+
 def get_supabase_client() -> Client:
     # Use the service role key to bypass RLS for the background worker
     url: str = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")

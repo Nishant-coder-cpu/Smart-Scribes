@@ -18,6 +18,31 @@ export default function RootLayout({
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              (function() {
+                function isExtensionError(err) {
+                  if (!err) return false;
+                  var str = (err.stack || '') + ' ' + (err.message || '') + ' ' + (err.filename || '');
+                  return str.indexOf('chrome-extension://') !== -1 || str.indexOf('chrome: call method') !== -1;
+                }
+                window.addEventListener('error', function(event) {
+                  if (isExtensionError(event.error) || (event.filename && event.filename.indexOf('chrome-extension://') !== -1)) {
+                    event.stopImmediatePropagation();
+                    event.preventDefault();
+                  }
+                }, true);
+                window.addEventListener('unhandledrejection', function(event) {
+                  if (isExtensionError(event.reason)) {
+                    event.stopImmediatePropagation();
+                    event.preventDefault();
+                  }
+                }, true);
+              })();
+            `,
+          }}
+        />
         <link
           href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@1,400;1,600;1,700;1,800&family=Inter:wght@300;400;500;600;700&display=swap"
           rel="stylesheet"

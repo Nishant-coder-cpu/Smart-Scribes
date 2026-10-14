@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Busboy from "busboy";
 import { Readable } from "stream";
-import { createClient } from "@/utils/supabase/server";
+import { createAdminClient } from "@/utils/supabase/server";
 import { getBucketName, getStorage, publicObjectUrl, safePathSegment } from "@/lib/gcp";
 import { enqueueLectureJob, parseLectureNumber } from "@/lib/jobs";
 
@@ -118,7 +118,7 @@ export async function POST(request: NextRequest) {
     const lectureNumber = parseLectureNumber(fields.lectureNumber)!;
     const lectureDate = fields.lectureDate || "";
 
-    const supabase = createClient();
+    const supabase = createAdminClient();
     const { jobId, lectureId } = await enqueueLectureJob(supabase, {
       courseId,
       lectureNumber,

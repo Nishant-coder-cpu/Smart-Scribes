@@ -327,33 +327,32 @@ def update_json_and_upload_video(bucket_name, course_name, lecture_id, json_path
         print(f"Images uploaded and JSON updated for lecture: {lecture_id}")
 
 
-def add_overall_url():
+def add_overall_url(fallback_url=None):
     file_path = "merged_all_in_one_gemini.json"
     if os.path.exists(file_path):
         try:
-            with open(file_path, "r") as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except json.JSONDecodeError:
             data = {}  # File exists but is empty or invalid
     else:
         data = {}
 
-    print(video_gcs_paths)
-
-    if not video_gcs_paths:
+    url = (video_gcs_paths[0] if video_gcs_paths else None) or fallback_url
+    if not url:
         raise RuntimeError(
             "No lecture video was downloaded (expected an .mp4 under the lecture folder); "
             "cannot set recording_url."
         )
-    data["recording_url"] = video_gcs_paths[0]
-    with open(file_path, "w") as f:
-        json.dump(data, f, indent=4)
+    data["recording_url"] = url
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
 
 def add_overall_id(course_name, lecture_folder):
     file_path = "merged_all_in_one_gemini.json"
     if os.path.exists(file_path):
         try:
-            with open(file_path, "r") as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except json.JSONDecodeError:
             data = {}  # File exists but is empty or invalid
@@ -367,19 +366,19 @@ def add_overall_id(course_name, lecture_folder):
     data["book_reference"] = ""
     data["definition"] = ""
     
-    with open(file_path, "w") as f:
-        json.dump(data, f, indent=4)
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
 
 def rename_json_file():
     file_path = "merged_all_in_one_gemini.json"
-    with open(file_path, "r") as f:
+    with open(file_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     data["content_data"] = data.pop("topics")  
     data["topic"] = data.pop("overall_topic")
 
-    with open(file_path, "w") as f:
-        json.dump(data, f, indent=4) 
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4, ensure_ascii=False) 
 
 def convert_dict_json_to_array_json(input_path="merged_all_in_one_gemini.json"):
     """
