@@ -1,9 +1,26 @@
--- Smart Scribes: bring an existing lectures_processing table up to date.
--- Safe to run more than once. Run in the Supabase SQL Editor.
+-- Smart Scribes: create or upgrade the lectures_processing table (the job
+-- queue read by Python_Codes/worker.py). Safe to run more than once.
+-- Run in the Supabase SQL Editor, after supabase_schema.sql (it needs the
+-- "lectures" table).
 --
--- Needed if the table was created from the old lectures_processing_table.sql,
--- whose CHECK constraint rejects the 'pending' / 'failed' statuses the worker
--- uses and which lacks the stage / progress / error / attempts columns.
+-- - No table yet: creates it.
+-- - Table from the old lectures_processing_table.sql: adds the missing
+--   stage / progress / error / attempts columns and allows the 'pending' /
+--   'failed' statuses the worker uses.
+
+CREATE TABLE IF NOT EXISTS public.lectures_processing (
+  id TEXT PRIMARY KEY,
+  lecture_id TEXT NOT NULL REFERENCES public.lectures (id) ON DELETE CASCADE,
+  status TEXT NOT NULL,
+  stage TEXT,
+  progress INTEGER DEFAULT 0,
+  error TEXT,
+  attempts INTEGER DEFAULT 0,
+  audio_file TEXT,
+  video_file TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
 
 ALTER TABLE public.lectures_processing ADD COLUMN IF NOT EXISTS stage TEXT;
 ALTER TABLE public.lectures_processing ADD COLUMN IF NOT EXISTS progress INTEGER DEFAULT 0;

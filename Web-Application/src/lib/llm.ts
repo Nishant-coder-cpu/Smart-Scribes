@@ -14,7 +14,7 @@ export function getLLM(provider?: LLMProvider, temperature: number = 0.7): BaseC
   const selectedProvider = provider || (process.env.DEFAULT_LLM_PROVIDER as LLMProvider) || 'gemini';
 
   if (selectedProvider === 'gemini') {
-    const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+    const model = process.env.GEMINI_MODEL || "gemini-3.8-flash";
 
     // Use Vertex AI when service account credentials are configured; if they
     // can't be loaded, fall back to an API key below.
