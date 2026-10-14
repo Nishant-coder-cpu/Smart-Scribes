@@ -1,119 +1,85 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "crypto";
+import { createClient } from "@/utils/supabase/server";
+import { getBucketName, getStorage, publicObjectUrl, safePathSegment } from "@/lib/gcp";
+import { makeLectureId } from "@/lib/ids";
+import { parseLectureNumber } from "@/lib/jobs";
+
 export const runtime = "nodejs";
-import { Storage } from "@google-cloud/storage";
-import fs from "fs";
 
-function getStorage() {
-  const projectId = process.env.GCP_PROJECT_ID;
-  const jsonEnv = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
-  const jsonPathEnv = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-  const clientEmailEnv = process.env.GCP_CLIENT_EMAIL;
-  const privateKeyEnv = process.env.GCP_PRIVATE_KEY;
-
-  if (!projectId) {
-    throw new Error("Missing GCP_PROJECT_ID env var");
-  }
-
-  let parsed: any | null = null;
-  let lastError: unknown = null;
-
-  if (jsonEnv) {
-    try {
-      const maybeDecoded = jsonEnv.trim().startsWith("{")
-        ? jsonEnv
-        : Buffer.from(jsonEnv, "base64").toString("utf8");
-      parsed = JSON.parse(maybeDecoded);
-    } catch (e) {
-      lastError = e;
-    }
-  }
-  if (!parsed && jsonPathEnv) {
-    try {
-      const file = fs.readFileSync(jsonPathEnv, "utf8");
-      parsed = JSON.parse(file);
-    } catch (e) {
-      lastError = e;
-    }
-  }
-  if (!parsed) {
-    if (clientEmailEnv && privateKeyEnv) {
-      parsed = {
-        client_email: clientEmailEnv,
-        private_key: privateKeyEnv,
-      };
-    } else {
-      const hint = jsonEnv
-        ? "GOOGLE_APPLICATION_CREDENTIALS_JSON looks invalid (ensure valid JSON, or provide base64 of the JSON)."
-        : jsonPathEnv
-          ? "GOOGLE_APPLICATION_CREDENTIALS path could not be read or parsed."
-          : "Provide GOOGLE_APPLICATION_CREDENTIALS_JSON, GOOGLE_APPLICATIONS_CREDENTIALS, or GCP_CLIENT_EMAIL and GCP_PRIVATE_KEY.";
-      throw new Error(`Failed to load GCP credentials: ${hint}`);
-    }
-  }
-  if (parsed.private_key && typeof parsed.private_key === "string") {
-    parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
-  }
-  return new Storage({ projectId, credentials: parsed });
-}
-
-async function uploadBufferToGCS(params: {
-  bucketName: string;
-  destinationPath: string;
-  buffer: Buffer;
-  contentType?: string | null;
-}) {
-  const { bucketName, destinationPath, buffer, contentType } = params;
-  const storage = getStorage();
-  const bucket = storage.bucket(bucketName);
-  const file = bucket.file(destinationPath);
-  await file.save(buffer, {
-    resumable: false,
-    contentType: contentType ?? undefined,
-    metadata: {
-      cacheControl: "public, max-age=31536000",
-    },
-  });
-  return `https://storage.googleapis.com/${bucketName}/${encodeURI(destinationPath)}`;
-}
+const MAX_SLIDES_BYTES = 50 * 1024 * 1024;
 
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
     const slidesFile = formData.get("file");
-    const courseId = (formData.get("courseId") as string) || "unknown-course";
-    const slideLectureNumber = (formData.get("lectureNumber") as string) || "";
-    const slideDate = (formData.get("date") as string) || "";
+    const rawCourseId = (formData.get("courseId") as string) || "";
+    const lectureNumber = parseLectureNumber(formData.get("lectureNumber"));
+    const slideDate = safePathSegment(formData.get("date"), "");
 
     if (!(slidesFile instanceof File)) {
       return NextResponse.json({ error: "No file provided" }, { status: 400 });
     }
-    const bucketName = process.env.GCS_BUCKET_NAME;
-    if (!bucketName) {
-      return NextResponse.json(
-        { error: "Missing GCS_BUCKET_NAME env var" },
-        { status: 500 }
-      );
+    if (!rawCourseId) {
+      return NextResponse.json({ error: "courseId is required" }, { status: 400 });
+    }
+    const isPdf =
+      slidesFile.type === "application/pdf" || slidesFile.name.toLowerCase().endsWith(".pdf");
+    if (!isPdf) {
+      return NextResponse.json({ error: "Slides must be a PDF file" }, { status: 400 });
+    }
+    if (slidesFile.size > MAX_SLIDES_BYTES) {
+      return NextResponse.json({ error: "Slides PDF must be 50 MB or smaller" }, { status: 400 });
     }
 
-    let safeBaseName = slidesFile.name.replace(/[^a-zA-Z0-9_.-]/g, '_');
-    let slideMetaPrefix = slideLectureNumber ? `lecture${slideLectureNumber}` : '';
-    slideMetaPrefix += slideDate ? `_${slideDate}` : '';
-    if (slideMetaPrefix) slideMetaPrefix += '_';
+    const bucketName = getBucketName();
+    const courseId = safePathSegment(rawCourseId, "unknown-course");
+
+    // The pipeline looks for "lecture<N>_" at the start of the name to pick the
+    // PDF that belongs to a specific lecture (see download_book in Python_Codes).
+    const safeBaseName = slidesFile.name.replace(/[^a-zA-Z0-9_.-]/g, "_");
+    let slideMetaPrefix = lectureNumber ? `lecture${lectureNumber}` : "";
+    slideMetaPrefix += slideDate ? `_${slideDate}` : "";
+    if (slideMetaPrefix) slideMetaPrefix += "_";
     const dest = `courses/${courseId}/slides/${slideMetaPrefix}_${safeBaseName}`;
+
     const arrayBuffer = await slidesFile.arrayBuffer();
-    const url = await uploadBufferToGCS({
-      bucketName,
-      destinationPath: dest,
-      buffer: Buffer.from(arrayBuffer),
-      contentType: slidesFile.type,
+    await getStorage().bucket(bucketName).file(dest).save(Buffer.from(arrayBuffer), {
+      resumable: false,
+      contentType: "application/pdf",
+      metadata: { cacheControl: "public, max-age=31536000" },
     });
-    return NextResponse.json({ url, path: dest });
+    const url = publicObjectUrl(bucketName, dest);
+
+    // Record the slide against its lecture so Slides Management can list it.
+    // Skipped (not an error) when the lecture row does not exist yet.
+    let recorded = false;
+    if (lectureNumber) {
+      const supabase = createClient();
+      const lectureId = makeLectureId(rawCourseId, lectureNumber);
+      const { data: lecture } = await supabase
+        .from("lectures")
+        .select("id")
+        .eq("id", lectureId)
+        .maybeSingle();
+      if (lecture) {
+        const { error } = await supabase.from("slides").insert({
+          id: `slide_${randomUUID()}`,
+          lecture_id: lectureId,
+          file_name: slidesFile.name,
+          file_path: url,
+        });
+        if (error) console.error("Failed to record slide in database:", error);
+        recorded = !error;
+      }
+    }
+
+    return NextResponse.json({ url, path: dest, recorded });
   } catch (error: any) {
+    console.error("Slides upload failed:", error);
     return NextResponse.json(
       { error: error?.message || "Slides upload failed" },
       { status: 500 }
     );
   }
 }
-
-

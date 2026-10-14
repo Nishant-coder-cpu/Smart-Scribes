@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   FileQuestion,
@@ -35,15 +35,20 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Input } from '@/components/ui/input';
+import { Markdown } from './Markdown';
 
 interface QnAGeneratorProps {
   open: boolean;
   onClose: () => void;
-  lectureContent?: unknown;
+  /** Plain-text lecture notes; used to suggest topics and ground questions. */
+  lectureContent?: string | null;
 }
 
 export function QnAGenerator({ open, onClose, lectureContent }: QnAGeneratorProps) {
-  const [topics, setTopics] = useState<string[]>(['Fourier Transform', 'Digital Filtering']);
+  const [topics, setTopics] = useState<string[]>([]);
+  const [lectureTopics, setLectureTopics] = useState<string[]>([]);
+  const [lectureTopicsFor, setLectureTopicsFor] = useState<string | null>(null);
+  const [loadingLectureTopics, setLoadingLectureTopics] = useState(false);
   const [currentTopic, setCurrentTopic] = useState<string>('');
   const [questionFormat, setQuestionFormat] = useState<string>('mcq');
   const [quizGenerated, setQuizGenerated] = useState(false);
@@ -57,7 +62,7 @@ export function QnAGenerator({ open, onClose, lectureContent }: QnAGeneratorProp
   const [subjectiveAnswers, setSubjectiveAnswers] = useState<Record<number, string>>({});
   const [revealedSubjective, setRevealedSubjective] = useState<Record<number, boolean>>({});
 
-  const popularTopics = [
+  const genericTopics = [
     'Fourier Transform',
     'Z-Transform & Filtering',
     'Binary Search Trees',
@@ -65,6 +70,35 @@ export function QnAGenerator({ open, onClose, lectureContent }: QnAGeneratorProp
     'Dijkstra Shortest Path',
     'Relational Normalization',
   ];
+
+  // Suggest topics from the open lecture (once per lecture) via /api/qna/topics.
+  useEffect(() => {
+    if (!open || !lectureContent || lectureTopicsFor === lectureContent) return;
+    let cancelled = false;
+    setLoadingLectureTopics(true);
+    fetch('/api/qna/topics', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lectureContent }),
+    })
+      .then((res) => (res.ok ? res.json() : { topics: [] }))
+      .then((data) => {
+        if (cancelled) return;
+        setLectureTopics(Array.isArray(data.topics) ? data.topics : []);
+        setLectureTopicsFor(lectureContent);
+      })
+      .catch(() => {
+        if (!cancelled) setLectureTopics([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingLectureTopics(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, lectureContent, lectureTopicsFor]);
+
+  const popularTopics = lectureTopics.length > 0 ? lectureTopics : genericTopics;
 
   const handleAddTopic = (topicToAdd?: string) => {
     const topic = (topicToAdd || currentTopic).trim();
@@ -107,80 +141,44 @@ export function QnAGenerator({ open, onClose, lectureContent }: QnAGeneratorProp
     setShowSolutions(false);
 
     try {
-      const allQuestions = [];
+      // Generate all topics in parallel; keep whatever succeeds.
+      const results = await Promise.allSettled(
+        topics.map(async (topic) => {
+          const response = await fetch('/api/qna/generate', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              topic,
+              questionFormat,
+              lectureContent: lectureContent || undefined,
+            }),
+          });
+          const data = await response.json().catch(() => ({} as any));
+          if (!response.ok) {
+            throw new Error(data.details || data.error || `HTTP ${response.status}`);
+          }
+          return (data.questions || []) as any[];
+        })
+      );
 
-      for (const topic of topics) {
-        const response = await fetch('/api/qna/generate', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            topic,
-            questionFormat,
-          }),
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to generate questions for topic: ${topic}`);
-        }
-
-        const data = await response.json();
-        if (data.questions && data.questions.length > 0) {
-          allQuestions.push(...data.questions);
-        }
-      }
+      const allQuestions = results.flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
+      const failedTopics = topics.filter((_, i) => results[i].status === 'rejected');
 
       if (allQuestions.length === 0) {
-        throw new Error('No questions were generated');
+        const firstError = results.find((r) => r.status === 'rejected') as PromiseRejectedResult | undefined;
+        throw new Error(firstError?.reason?.message || 'No questions were generated');
       }
 
       setQuestions(allQuestions);
       setQuizGenerated(true);
+      if (failedTopics.length > 0) {
+        setError(`Could not generate questions for: ${failedTopics.join(', ')}`);
+      }
     } catch (err: any) {
       console.error('Quiz Generation Error:', err);
-      // High-quality fallback questions matching current academic topics so user never encounters a blank screen!
-      const fallbackQuestions = [
-        {
-          id: 'fb_1',
-          question: 'What is the primary frequency-domain purpose of the Fast Fourier Transform (FFT)?',
-          options: [
-            'To decompose a time-domain signal into discrete frequency components in O(N log N) time',
-            'To compress analog audio into lossy MP3 packets',
-            'To perform matrix inversion for linear neural network layers',
-            'To compute convolution directly in spatial domain without transform',
-          ],
-          correct: 0,
-          explanation: 'The Fast Fourier Transform (FFT) computes the discrete Fourier transform (DFT) in O(N log N) operations instead of O(N^2), revealing the sinusoidal frequency spectrum of time-domain data.',
-        },
-        {
-          id: 'fb_2',
-          question: 'In digital IIR/FIR filter synthesis, what does the unit circle in the Z-plane represent?',
-          options: [
-            'Direct analog current voltage levels',
-            'The continuous frequency response evaluated from 0 to 2π radians',
-            'The computational time complexity limit of the filter',
-            'The region of unstable divergent poles',
-          ],
-          correct: 1,
-          explanation: 'Evaluating the Z-transform along the unit circle |z| = 1 corresponds directly to the discrete-time Fourier transform (DTFT), representing frequency response from ω = 0 to 2π.',
-        },
-        {
-          id: 'fb_3',
-          question: 'When gradient descent oscillates uncontrollably across steep ravine contours, which optimization technique dampens the oscillations?',
-          options: [
-            'Decreasing batch size to 1 (pure stochastic gradient descent)',
-            'Removing non-linear activation functions completely',
-            'Momentum / Adam optimizer with exponential moving average of past gradients',
-            'Increasing the learning rate tenfold',
-          ],
-          correct: 2,
-          explanation: 'Momentum accelerates gradient vectors in the consistent downward direction while canceling out orthogonal oscillations across steep valley walls.',
-        },
-      ];
-
-      setQuestions(fallbackQuestions);
-      setQuizGenerated(true);
+      setError(`Quiz generation failed: ${err?.message || 'unknown error'}. Please try again.`);
     } finally {
       setIsGenerating(false);
     }
@@ -235,7 +233,11 @@ export function QnAGenerator({ open, onClose, lectureContent }: QnAGeneratorProp
             {/* Quick Topic Chips */}
             <div>
               <Label className="text-xs font-semibold text-slate-700 block mb-2">
-                Popular Lecture Topics (Click to add)
+                {lectureTopics.length > 0
+                  ? 'Topics from this lecture (Click to add)'
+                  : loadingLectureTopics
+                  ? 'Finding topics in this lecture…'
+                  : 'Popular Topics (Click to add)'}
               </Label>
               <div className="flex flex-wrap gap-1.5">
                 {popularTopics.map((top) => (
@@ -399,9 +401,9 @@ export function QnAGenerator({ open, onClose, lectureContent }: QnAGeneratorProp
                       <span className="w-6 h-6 rounded-lg bg-blue-50 text-blue-700 font-bold text-xs flex items-center justify-center shrink-0 mt-0.5">
                         {qIdx + 1}
                       </span>
-                      <p className="text-sm font-semibold text-slate-900 leading-snug">
-                        {q.question}
-                      </p>
+                      <Markdown className="text-sm font-semibold text-slate-900 leading-snug">
+                        {String(q.question)}
+                      </Markdown>
                     </div>
 
                     {/* MCQ Options (Clickable & Interactive) */}
@@ -439,7 +441,7 @@ export function QnAGenerator({ open, onClose, lectureContent }: QnAGeneratorProp
                                 }`}>
                                   {String.fromCharCode(65 + optIdx)}
                                 </span>
-                                <span>{option}</span>
+                                <Markdown inline>{String(option)}</Markdown>
                               </div>
 
                               {isOptionSelected && (
@@ -493,9 +495,9 @@ export function QnAGenerator({ open, onClose, lectureContent }: QnAGeneratorProp
                           <CheckCircle className="w-3.5 h-3.5 text-blue-600" />
                           Explanation & Concept Principle:
                         </p>
-                        <p className="leading-relaxed whitespace-pre-line text-slate-700">
-                          {q.explanation || q.solution}
-                        </p>
+                        <Markdown className="leading-relaxed text-slate-700">
+                          {String(q.explanation || q.solution)}
+                        </Markdown>
                       </motion.div>
                     )}
                   </Card>

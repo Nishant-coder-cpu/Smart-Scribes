@@ -178,9 +178,14 @@ def _get_gemini_client():
                     creds_file = candidate_root
         if creds_file and os.path.exists(creds_file):
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(creds_file)
+            project = os.getenv("GCP_PROJECT_ID")
+            if not project:
+                # Fall back to the project the service account belongs to.
+                with open(creds_file, "r", encoding="utf-8") as f:
+                    project = json.load(f).get("project_id")
             _gemini_client = genai.Client(
                 vertexai=True,
-                project=os.getenv("GCP_PROJECT_ID", "project-dbb09cfb-c833-4508-83d"),
+                project=project,
                 location=os.getenv("GCP_LOCATION", "us-central1")
             )
         else:
@@ -198,13 +203,28 @@ def gemini_generate(
     safety_settings: list | None = None,
 ) -> str:
     """Send a single-turn text prompt to Google Gemini and return the text."""
+    from google.genai import types
+
     model_name = model_name or os.getenv("GEMINI_MODEL_FAST", "gemini-2.5-flash")
     client = _get_gemini_client()
+    # max_tokens is deliberately not forwarded: Gemini 2.5 counts "thinking"
+    # tokens against max_output_tokens, so the small Bedrock-oriented limits
+    # used by callers would truncate answers.
+    config = types.GenerateContentConfig(
+        temperature=temperature,
+        safety_settings=[types.SafetySetting(**s) for s in safety_settings] if safety_settings else None,
+    )
     response = client.models.generate_content(
         model=model_name,
         contents=prompt,
+        config=config,
     )
-    return response.text
+    text = response.text
+    if not text:
+        # Blocked by safety filters or truncated before any text was produced.
+        reason = response.candidates[0].finish_reason if response.candidates else None
+        raise RuntimeError(f"Gemini returned no text (finish_reason={reason})")
+    return text
 
 
 # ─── Unified interface ─────────────────────────────────────────────────
@@ -252,7 +272,7 @@ def generate_fast(prompt: str, **kwargs) -> str:
     """Use the fast/cheap model tier."""
     provider = kwargs.pop("provider", None) or DEFAULT_PROVIDER
     if provider == "aws":
-        kwargs.setdefault("model", os.getenv("BEDROCK_MODEL_FAST", "anthropic.claude-3-haiku-20240307-v1:0"))
+        kwargs.setdefault("model", os.getenv("BEDROCK_MODEL_FAST") or os.getenv("BEDROCK_MODEL_ID") or "anthropic.claude-3-haiku-20240307-v1:0")
     else:
         kwargs.setdefault("model", os.getenv("GEMINI_MODEL_FAST", "gemini-2.5-flash"))
     return generate(prompt, provider=provider, **kwargs)
@@ -262,7 +282,7 @@ def generate_pro(prompt: str, **kwargs) -> str:
     """Use the high-quality model tier."""
     provider = kwargs.pop("provider", None) or DEFAULT_PROVIDER
     if provider == "aws":
-        kwargs.setdefault("model", os.getenv("BEDROCK_MODEL_PRO", "anthropic.claude-3-sonnet-20240229-v1:0"))
+        kwargs.setdefault("model", os.getenv("BEDROCK_MODEL_PRO") or os.getenv("BEDROCK_MODEL_ID") or "anthropic.claude-3-sonnet-20240229-v1:0")
     else:
         kwargs.setdefault("model", os.getenv("GEMINI_MODEL_PRO", "gemini-2.5-flash"))
     return generate(prompt, provider=provider, **kwargs)
@@ -271,6 +291,8 @@ def generate_pro(prompt: str, **kwargs) -> str:
 # ─── JSON extraction helper ────────────────────────────────────────────
 def safe_json(text: str):
     """Best-effort JSON extraction from LLM output."""
+    if not text:
+        return {}
     try:
         return json.loads(text)
     except Exception:

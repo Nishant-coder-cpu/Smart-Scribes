@@ -1,215 +1,107 @@
-import { getLLM } from "./llm";
-import { BaseChatModel } from "@langchain/core/language_models/chat_models";
-import { DynamicStructuredTool } from "@langchain/core/tools";
-import { z } from "zod";
-import { ChatPromptTemplate } from "@langchain/core/prompts";
-import { RunnableSequence } from "@langchain/core/runnables";
+import { getLLM, messageText } from "./llm";
+import { AIMessage, BaseMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
+import { googleSearch, isWebSearchConfigured } from "./web-search";
 
-// Google Custom Search Tool
-const createGoogleSearchTool = (apiKey: string, searchEngineId: string) => {
-  return new DynamicStructuredTool({
-    name: "google_search",
-    description: "Search Google for current information about courses, assignments, deadlines, and academic topics.",
-    schema: z.object({
-      query: z.string().describe("The search query"),
-    }),
-    func: async ({ query }) => {
-      try {
-        const url = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${searchEngineId}&q=${encodeURIComponent(query)}`;
-        const response = await fetch(url);
-        const data = await response.json();
+export interface ChatTurn {
+  role: "user" | "assistant";
+  content: string;
+}
 
-        if (data.items && data.items.length > 0) {
-          const results = data.items.slice(0, 3).map((item: any) => 
-            `Title: ${item.title}\nSnippet: ${item.snippet}\nLink: ${item.link}`
-          ).join("\n\n");
-          return results;
-        }
-        return "No results found.";
-      } catch (error) {
-        console.error("Search error:", error);
-        return "Error performing search.";
-      }
-    },
-  });
-};
+// Keep prompts bounded: lecture JSON can be large and history grows per turn.
+const MAX_LECTURE_CHARS = 30_000;
+const MAX_HISTORY_TURNS = 10;
+export const SEARCH_SENTINEL = "SEARCH_NEEDED";
 
-// Simple agent that can use tools
-async function runWithTools(
-  llm: BaseChatModel,
-  tools: DynamicStructuredTool[],
-  query: string
-): Promise<string> {
-  // First, ask the LLM if it needs to search
-  const decisionPrompt = ChatPromptTemplate.fromTemplate(
-    `You are a helpful AI learning assistant for college courses. 
-    
-User question: {query}
+const TUTOR_PERSONA =
+  "You are Smart Scribes, a friendly and rigorous AI tutor for college courses. " +
+  "Explain clearly, use step-by-step reasoning for maths, and format answers in Markdown. " +
+  "Write maths in LaTeX using $...$ for inline and $$...$$ for display equations.";
 
-Do you need to search for current information to answer this question? 
-If the question is about:
-- Current course schedules, deadlines, or assignments
-- Recent topics or updates
-- Specific factual information you're unsure about
-
-Respond with ONLY "SEARCH: <search query>" if you need to search, or "ANSWER: <your answer>" if you can answer directly.`
-  );
-
-  const decision = await llm.invoke(
-    await decisionPrompt.format({ query })
-  );
-
-  const decisionText = decision.content.toString();
-
-  // Check if we need to search
-  if (decisionText.startsWith("SEARCH:")) {
-    const searchQuery = decisionText.replace("SEARCH:", "").trim();
-    const searchTool = tools[0];
-    const searchResults = await searchTool.func({ query: searchQuery });
-
-    // Now generate final answer with search results
-    const answerPrompt = ChatPromptTemplate.fromTemplate(
-      `You are a helpful AI learning assistant for college courses.
-
-User question: {query}
-
-Search results:
-{searchResults}
-
-Based on the search results above, provide a comprehensive and friendly answer to the student's question. Be conversational and supportive.`
+function historyMessages(history: ChatTurn[]): BaseMessage[] {
+  return history
+    .slice(-MAX_HISTORY_TURNS)
+    .map((turn) =>
+      turn.role === "assistant" ? new AIMessage(turn.content) : new HumanMessage(turn.content)
     );
+}
 
-    const finalAnswer = await llm.invoke(
-      await answerPrompt.format({ 
-        query, 
-        searchResults 
-      })
-    );
+/**
+ * Decide from the start of a streamed reply whether the model asked for a web
+ * search (it replies with exactly SEARCH_SENTINEL) or is answering directly.
+ * 'undecided' means the text so far could still turn out to be the sentinel.
+ */
+export function classifySearchPrefix(textSoFar: string): "search" | "answer" | "undecided" {
+  const trimmed = textSoFar.trimStart();
+  if (trimmed.startsWith(SEARCH_SENTINEL)) return "search";
+  if (trimmed.length === 0 || SEARCH_SENTINEL.startsWith(trimmed)) return "undecided";
+  return "answer";
+}
 
-    return finalAnswer.content.toString();
-  } else if (decisionText.startsWith("ANSWER:")) {
-    return decisionText.replace("ANSWER:", "").trim();
-  } else {
-    // Fallback: use the decision text as answer
-    return decisionText;
+async function* streamText(llm: ReturnType<typeof getLLM>, messages: BaseMessage[]) {
+  const stream = await llm.stream(messages);
+  for await (const chunk of stream) {
+    const text = messageText(chunk);
+    if (text) yield text;
   }
 }
 
-// Main function to generate responses
-export async function generateResponse(
+/**
+ * Stream the tutor's answer as text chunks. Grounded in the lecture notes when
+ * given; falls back to Google search when the model says the notes (or its own
+ * knowledge) are not enough and search is configured.
+ */
+export async function* streamResponse(
   query: string,
-  geminiApiKey?: string,
-  googleSearchApiKey?: string,
-  searchEngineId?: string,
-  lectureContent?: string
-): Promise<string> {
-  try {
-    // Initialize LLM (respects DEFAULT_LLM_PROVIDER env var, e.g. gemini)
-    const llm = getLLM(undefined, 0.7) as any;
+  options: { lectureContent?: string | null; history?: ChatTurn[] } = {}
+): AsyncGenerator<string> {
+  const llm = getLLM(undefined, 0.7);
+  const history = historyMessages(options.history ?? []);
+  const canSearch = isWebSearchConfigured();
+  const lectureContent = options.lectureContent?.slice(0, MAX_LECTURE_CHARS);
 
-    // Create tools if search credentials are provided
-    const tools = (googleSearchApiKey && searchEngineId) 
-      ? [createGoogleSearchTool(googleSearchApiKey, searchEngineId)]
-      : [];
-
-    // If lecture content is available, use it as primary context
-    if (lectureContent) {
-      // First try to answer using lecture content
-      const lecturePrompt = ChatPromptTemplate.fromTemplate(
-        `You are a helpful AI learning assistant for college courses. Answer the following question primarily based on the lecture content provided. 
-If the lecture content doesn't contain the information needed to answer the question completely, indicate that you'll need to search for additional information.
-
-Lecture Content:
-{lectureContent}
-
-Question: {query}
-
-Important Instructions:
-1. Base your answer primarily on the lecture content provided above.
-2. If the lecture content contains the information needed, provide a comprehensive answer using that information.
-3. If the lecture content is insufficient or doesn't address the question, respond with "SEARCH_NEEDED" and then we'll use web search to supplement.
-4. Be friendly, supportive, and educational in your response.
-
-Your response:`
-      );
-
-      const lectureResponse = await llm.invoke(
-        await lecturePrompt.format({ 
-          query, 
-          lectureContent 
-        })
-      );
-
-      const lectureResponseText = lectureResponse.content.toString();
-      
-      // If the response indicates search is needed and tools are available, use them
-      if (lectureResponseText.includes("SEARCH_NEEDED") && tools.length > 0) {
-        return await runWithTools(llm, tools, query);
-      } else {
-        // Return the lecture-based response (with any "SEARCH_NEEDED" text removed)
-        return lectureResponseText.replace("SEARCH_NEEDED", "").trim();
-      }
-    }
-
-    // If no lecture content and no search tools, just use LLM directly
-    if (tools.length === 0) {
-      const prompt = ChatPromptTemplate.fromTemplate(
-        `You are a helpful AI learning assistant for college courses. Answer the following question in a friendly, supportive, and comprehensive way.
-
-Question: {query}
-
-Answer:`
-      );
-
-      const response = await llm.invoke(
-        await prompt.format({ query })
-      );
-
-      return response.content.toString();
-    }
-
-    // Use tools if available (and no lecture content was provided)
-    return await runWithTools(llm, tools, query);
-
-  } catch (error) {
-    console.error("Error generating response:", error);
-    throw error;
+  let system = TUTOR_PERSONA;
+  if (lectureContent) {
+    system +=
+      "\n\nAnswer primarily from the lecture notes below. If they don't cover the question, " +
+      (canSearch
+        ? `reply with exactly "${SEARCH_SENTINEL}" and nothing else.`
+        : "answer from general knowledge and say briefly that it goes beyond this lecture.") +
+      `\n\nLECTURE NOTES:\n${lectureContent}`;
+  } else if (canSearch) {
+    system +=
+      `\n\nIf the question needs current information (schedules, deadlines, recent events) ` +
+      `or facts you are unsure about, reply with exactly "${SEARCH_SENTINEL}" and nothing else.`;
   }
-}
 
-// Alternative: Simple chat without tools
-export async function simpleChat(
-  query: string,
-  geminiApiKey: string
-): Promise<string> {
-  try {
-    if (!geminiApiKey) {
-      throw new Error("Gemini API key is required");
-    }
+  const firstPass = streamText(llm, [new SystemMessage(system), ...history, new HumanMessage(query)]);
 
-    const llm = getLLM('aws', 0.7) as any;
-
-    const prompt = ChatPromptTemplate.fromTemplate(
-      `You are a helpful AI learning assistant for college courses. You help students with:
-- Understanding course concepts
-- Study tips and resources
-- Assignment guidance
-- Course-related questions
-
-Be friendly, supportive, and encouraging in your responses.
-
-Student question: {query}
-
-Your response:`
-    );
-
-    const response = await llm.invoke(
-      await prompt.format({ query })
-    );
-
-    return response.content.toString();
-  } catch (error) {
-    console.error("Error in simple chat:", error);
-    throw error;
+  if (!canSearch) {
+    yield* firstPass;
+    return;
   }
+
+  // Hold back only the first few characters until we know it isn't the sentinel.
+  let buffer = "";
+  let decision: "search" | "answer" | "undecided" = "undecided";
+  for await (const text of firstPass) {
+    if (decision === "answer") {
+      yield text;
+      continue;
+    }
+    buffer += text;
+    decision = classifySearchPrefix(buffer);
+    if (decision === "search") break; // stops the first stream
+    if (decision === "answer") yield buffer;
+  }
+  // 'undecided' at the end means an empty reply or a cut-off sentinel: search too.
+  if (decision === "answer") return;
+
+  const searchResults = await googleSearch(query, 3);
+  const groundedSystem =
+    TUTOR_PERSONA +
+    (searchResults
+      ? `\n\nUse these web search results where relevant and cite the sources you use:\n${searchResults}`
+      : "\n\nWeb search returned nothing useful; answer from general knowledge and say so.");
+
+  yield* streamText(llm, [new SystemMessage(groundedSystem), ...history, new HumanMessage(query)]);
 }

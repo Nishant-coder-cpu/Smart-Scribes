@@ -1,0 +1,10 @@
+# Lightweight dependencies for the unit tests (no PyTorch / model weights needed).
+# Install with: pip install -r requirements-dev.txt   then run: pytest
+pytest
+numpy
+scikit-learn
+python-dotenv
+requests
+supabase
+google-cloud-storage
+opencv-python-headless

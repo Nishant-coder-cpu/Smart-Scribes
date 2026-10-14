@@ -13,7 +13,7 @@ import { CourseUpload } from "./professor/CourseUpload";
 import { SlidesUpload } from "./professor/SlidesUpload";
 import { DoubtsSection } from "./professor/DoubtsSection";
 import { LectureProcessing } from "./professor/LectureProcessing";
-import { SlidesManagement } from "./professor/SlidesManagement";
+import { SlidesManagement, SLIDES_UPLOADED_EVENT } from "./professor/SlidesManagement";
 import { Card } from "./ui/card";
 
 interface ProfessorDashboardProps {
@@ -177,21 +177,26 @@ export function ProfessorDashboard({ onLogout }: ProfessorDashboardProps) {
       form.append("lectureNumber", slideLectureNumber);
       form.append("date", slideDate);
       const res = await fetch("/api/upload/slides", { method: "POST", body: form });
-      if (!res.ok) throw new Error((await res.json()).error || "Slide upload failed");
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({} as any));
+        throw new Error((body as any).error || "Slide upload failed");
+      }
       const data = await res.json();
       const slideUrl = data.url;
-      const updatedCourses = courses.map((c) => {
-        if (c.id !== selectedCourseId) return c;
-        const newMaterials = { ...c.materials! };
-        newMaterials.slides.push({
-          name: selectedSlideFile.name,
-          lectureNumber: slideLectureNumber,
-          date: slideDate,
-          url: slideUrl,
-        });
-        return { ...c, materials: newMaterials };
-      });
-      setCourses(updatedCourses);
+      const newSlide = {
+        name: selectedSlideFile.name,
+        lectureNumber: slideLectureNumber,
+        date: slideDate,
+        url: slideUrl,
+      };
+      setCourses((prev) =>
+        prev.map((c) =>
+          c.id === selectedCourseId && c.materials
+            ? { ...c, materials: { ...c.materials, slides: [...c.materials.slides, newSlide] } }
+            : c
+        )
+      );
+      window.dispatchEvent(new CustomEvent(SLIDES_UPLOADED_EVENT));
       setSelectedSlideFile(null);
       setSlideLectureNumber("");
       setSlideDate("");
@@ -218,78 +223,32 @@ export function ProfessorDashboard({ onLogout }: ProfessorDashboardProps) {
     }
   };
 
-  const handleGenerateContent = async () => {
-    if (!lectureNumber || !lectureDate) {
-      alert("Please enter lecture number and date before generating content.");
-      return;
-    }
-
-    const audioUrl = selectedCourse?.materials?.audio;
-    const videoUrl = selectedCourse?.materials?.video;
-
-    if (!audioUrl || !videoUrl) {
-      alert("Please upload both audio and video files first.");
-      return;
-    }
-
-    try {
-      const res = await fetch("/api/jobs/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          courseId: selectedCourseId,
-          lectureNumber,
-          audioUrl,
-          videoUrl
-        })
-      });
-      if (!res.ok) throw new Error(await res.text());
-    } catch (e: any) {
-      alert("Failed to enqueue processing job: " + e.message);
-      return;
-    }
-
-    const updatedCourses = courses.map((c) => {
-      if (c.id !== selectedCourseId) return c;
-      const newMaterials = { ...c.materials! };
-
-      newMaterials.generatedContent.push({
-        lectureNumber,
-        date: lectureDate,
-        audioFile: audioUrl,
-        videoFile: videoUrl,
-      });
-
-      // Clear current audio and video
-      newMaterials.audio = null;
-      newMaterials.video = null;
-
-      return { ...c, materials: newMaterials };
-    });
-
-    setCourses(updatedCourses);
+  // Called by CourseUpload once files are in cloud storage and the job is queued.
+  const handleLectureQueued = (lecture: {
+    lectureNumber: string;
+    date: string;
+    audioFile: string;
+    videoFile: string;
+  }) => {
+    setCourses((prev) =>
+      prev.map((c) => {
+        if (c.id !== selectedCourseId || !c.materials) return c;
+        return {
+          ...c,
+          materials: {
+            ...c.materials,
+            audio: null,
+            video: null,
+            generatedContent: [...c.materials.generatedContent, lecture],
+          },
+        };
+      })
+    );
+    setPendingAudioFile(null);
+    setPendingVideoFile(null);
     setLectureNumber("");
     setLectureDate("");
-    alert(`✅ Pipeline job enqueued for Lecture ${lectureNumber} on ${lectureDate}! Processing has started in the background.`);
   };
-
-  // Capture upload completion from child and persist URLs on the course
-  React.useEffect(() => {
-    function onUploaded(e: any) {
-      const { audioUrl, videoUrl } = e.detail || {};
-      if (!audioUrl || !videoUrl || !selectedCourseId) return;
-      const updated = courses.map((c) => {
-        if (c.id !== selectedCourseId) return c;
-        const newMaterials = { ...c.materials! };
-        newMaterials.audio = audioUrl;
-        newMaterials.video = videoUrl;
-        return { ...c, materials: newMaterials };
-      });
-      setCourses(updated);
-    }
-    window.addEventListener("gcs-upload-completed", onUploaded as any);
-    return () => window.removeEventListener("gcs-upload-completed", onUploaded as any);
-  }, [courses, selectedCourseId]);
 
   if (loading)
     return (
@@ -362,9 +321,9 @@ export function ProfessorDashboard({ onLogout }: ProfessorDashboardProps) {
               lectureDate={lectureDate}
               setLectureDate={setLectureDate}
               handleFileUpload={handleFileUpload}
-              handleGenerateContent={handleGenerateContent}
-        pendingAudioFile={pendingAudioFile}
-        pendingVideoFile={pendingVideoFile}
+              onLectureQueued={handleLectureQueued}
+              pendingAudioFile={pendingAudioFile}
+              pendingVideoFile={pendingVideoFile}
             />
 
             {/* Lecture Processing Status */}

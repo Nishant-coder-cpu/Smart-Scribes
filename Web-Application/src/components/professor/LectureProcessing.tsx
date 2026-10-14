@@ -1,48 +1,69 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Card } from "../ui/card";
 import { Button } from "../ui/button";
-import { getLectures, getLectureProcessing, createLectureProcessing, updateLectureProcessingStatus } from "../../lib/api";
+import { getLectures, getLatestProcessingJobs, retryLectureProcessing } from "../../lib/api";
 import { Lecture, LectureProcessing as LectureProcessingType } from "../../types";
+import { LECTURE_JOB_QUEUED_EVENT } from "./CourseUpload";
 
 interface LectureProcessingProps {
   courseId: string;
 }
 
+// The worker updates rows every few seconds; poll at a similar pace while busy.
+const POLL_INTERVAL_MS = 5000;
+const ACTIVE_STATUSES = new Set(["pending", "uploading", "processing", "generating"]);
+
 export function LectureProcessing({ courseId }: LectureProcessingProps) {
   const [lectures, setLectures] = useState<Lecture[]>([]);
   const [processingItems, setProcessingItems] = useState<LectureProcessingType[]>([]);
   const [loading, setLoading] = useState(true);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function fetchData() {
-      try {
-        setLoading(true);
-        const lecturesData = await getLectures(courseId);
-        setLectures(lecturesData);
-        
-        // Fetch processing status for each lecture
-        const processingData = await Promise.all(
-          lecturesData.map(async (lecture) => {
-            const processing = await getLectureProcessing(lecture.id);
-            return processing;
-          })
-        );
-        
-        setProcessingItems(processingData.filter(Boolean) as LectureProcessingType[]);
-      } catch (error) {
-        console.error("Error fetching lecture processing data:", error);
-      } finally {
-        setLoading(false);
-      }
-    }
-    
-    if (courseId) {
-      fetchData();
+  const fetchData = useCallback(async () => {
+    try {
+      const lecturesData = await getLectures(courseId);
+      setLectures(lecturesData);
+      const jobs = await getLatestProcessingJobs(lecturesData.map((l) => l.id));
+      jobs.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+      setProcessingItems(jobs);
+    } catch (error) {
+      console.error("Error fetching lecture processing data:", error);
+    } finally {
+      setLoading(false);
     }
   }, [courseId]);
 
+  useEffect(() => {
+    if (!courseId) return;
+    setLoading(true);
+    fetchData();
+    const onQueued = () => fetchData();
+    window.addEventListener(LECTURE_JOB_QUEUED_EVENT, onQueued);
+    return () => window.removeEventListener(LECTURE_JOB_QUEUED_EVENT, onQueued);
+  }, [courseId, fetchData]);
+
+  const hasActiveJobs = processingItems.some((item) => ACTIVE_STATUSES.has(item.status));
+  useEffect(() => {
+    if (!hasActiveJobs) return;
+    const timer = setInterval(fetchData, POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [hasActiveJobs, fetchData]);
+
+  const handleRetry = async (item: LectureProcessingType) => {
+    try {
+      setRetryingId(item.id);
+      await retryLectureProcessing(item.id);
+      await fetchData();
+    } catch (error: any) {
+      alert(error?.message || "Could not re-queue this lecture");
+    } finally {
+      setRetryingId(null);
+    }
+  };
+
   const getStatusBadgeClass = (status: string) => {
     switch (status) {
+      case 'pending':
       case 'uploading':
         return "bg-blue-100 text-blue-800";
       case 'processing':
@@ -51,6 +72,8 @@ export function LectureProcessing({ courseId }: LectureProcessingProps) {
         return "bg-purple-100 text-purple-800";
       case 'completed':
         return "bg-green-100 text-green-800";
+      case 'failed':
+        return "bg-red-100 text-red-800";
       default:
         return "bg-gray-100 text-gray-800";
     }
@@ -58,53 +81,20 @@ export function LectureProcessing({ courseId }: LectureProcessingProps) {
 
   const getStatusText = (status: string) => {
     switch (status) {
+      case 'pending':
+        return "Queued — waiting for the worker";
       case 'uploading':
-        return "send to server processing will start soon";
+        return "Uploading";
       case 'processing':
         return "Processing in Pipeline";
       case 'generating':
         return "Generating Content";
       case 'completed':
         return "Pushed on Website";
+      case 'failed':
+        return "Failed";
       default:
         return status;
-    }
-  };
-
-  // Simulate status update (in a real app, this would be triggered by backend events)
-  const simulateNextStatus = async (item: LectureProcessingType) => {
-    const statusOrder = ['uploading', 'processing', 'generating', 'completed'];
-    const currentIndex = statusOrder.indexOf(item.status);
-    
-    if (currentIndex < statusOrder.length - 1) {
-      const nextStatus = statusOrder[currentIndex + 1] as 'uploading' | 'processing' | 'generating' | 'completed';
-      
-      try {
-        await updateLectureProcessingStatus(item.id, nextStatus);
-        
-        // Update local state
-        setProcessingItems(prev => 
-          prev.map(p => 
-            p.id === item.id ? { ...p, status: nextStatus } : p
-          )
-        );
-      } catch (error) {
-        console.error("Error updating status:", error);
-      }
-    }
-  };
-
-  const startNewProcessing = async (lectureId: string) => {
-    try {
-      const newProcessing = await createLectureProcessing({
-        lectureId,
-        audioFile: "sample_audio.mp3",
-        videoFile: "sample_video.mp4"
-      });
-      
-      setProcessingItems(prev => [...prev, newProcessing]);
-    } catch (error) {
-      console.error("Error creating new processing:", error);
     }
   };
 
@@ -127,34 +117,21 @@ export function LectureProcessing({ courseId }: LectureProcessingProps) {
       <h2 className="text-2xl font-semibold mb-6 text-center text-purple-700">
         Lecture Processing Status
       </h2>
-      
+
       {processingItems.length === 0 ? (
         <div className="text-center py-6">
-          <p className="text-gray-500 mb-4">No lectures are currently being processed.</p>
-          {lectures.length > 0 && (
-            <div className="space-y-4">
-              <p className="font-medium">Start processing for a lecture:</p>
-              <div className="flex flex-wrap gap-2 justify-center">
-                {lectures.map(lecture => (
-                  <Button 
-                    key={lecture.id}
-                    variant="outline"
-                    className="bg-purple-50 hover:bg-purple-100"
-                    onClick={() => startNewProcessing(lecture.id)}
-                  >
-                    Lecture {lecture.number}
-                  </Button>
-                ))}
-              </div>
-            </div>
-          )}
+          <p className="text-gray-500">
+            No lectures have been processed yet. Upload audio and video above to start.
+          </p>
         </div>
       ) : (
         <div className="space-y-4">
           {processingItems.map(item => {
             const lecture = lectures.find(l => l.id === item.lectureId);
+            const progress = Math.max(0, Math.min(100, item.progress ?? 0));
+            const isActive = ACTIVE_STATUSES.has(item.status);
             return (
-              <div 
+              <div
                 key={item.id}
                 className="border rounded-lg p-4 bg-gray-50 hover:shadow-sm transition-all"
               >
@@ -162,24 +139,50 @@ export function LectureProcessing({ courseId }: LectureProcessingProps) {
                   <h3 className="font-semibold text-purple-700">
                     {lecture ? `Lecture ${lecture.number}` : 'Unknown Lecture'}
                   </h3>
-                  <span 
+                  <span
                     className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusBadgeClass(item.status)}`}
                   >
                     {getStatusText(item.status)}
                   </span>
                 </div>
-                
+
+                {isActive && (
+                  <div className="mb-3">
+                    <div className="flex justify-between text-xs text-gray-600 mb-1">
+                      <span>{item.stage || "Waiting"}</span>
+                      <span>{progress}%</span>
+                    </div>
+                    <div className="h-2 w-full rounded-full bg-purple-100 overflow-hidden">
+                      <div className="h-full bg-purple-600 transition-all" style={{ width: `${progress}%` }} />
+                    </div>
+                  </div>
+                )}
+
+                {item.status === 'failed' && item.error && (
+                  <p className="mb-3 text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2 break-words">
+                    {item.error}
+                  </p>
+                )}
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm mb-3">
-                  {item.audioFile && <p className="text-gray-700">🎵 Audio: {item.audioFile}</p>}
-                  {item.videoFile && <p className="text-gray-700">🎬 Video: {item.videoFile}</p>}
+                  {item.audioFile && <p className="text-gray-700 truncate">🎵 Audio: {item.audioFile}</p>}
+                  {item.videoFile && <p className="text-gray-700 truncate">🎬 Video: {item.videoFile}</p>}
                 </div>
-                
+
                 <div className="flex justify-between items-center">
                   <p className="text-xs text-gray-500">
                     Updated: {new Date(item.updatedAt).toLocaleString()}
                   </p>
-                  
-                  
+                  {item.status === 'failed' && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={retryingId === item.id}
+                      onClick={() => handleRetry(item)}
+                    >
+                      {retryingId === item.id ? "Re-queuing..." : "Retry"}
+                    </Button>
+                  )}
                 </div>
               </div>
             );

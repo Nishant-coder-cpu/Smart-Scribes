@@ -133,7 +133,8 @@ class LectureDocumentGenerator:
             
             for key in possible_keys:
                 if key in self.audio_transcripts:
-                    lecture_audio_text = self.audio_transcripts[key]
+                    entry = self.audio_transcripts[key]
+                    lecture_audio_text = entry.get('transcript', '') if isinstance(entry, dict) else str(entry)
                     print(f"  ✓ Found transcript using key: {key}")
                     break
         
@@ -268,11 +269,11 @@ Summary:"""
         if isinstance(all_segments_data, dict):
             print(f"Converting dict format to list...")
             segments_list = []
-            for key in sorted(all_segments_data.keys(), key=lambda x: int(x.split('')[1]) if '' in x else int(x)):
+            for key in sorted(all_segments_data.keys(), key=lambda x: int(x.split('_')[1]) if '_' in x else int(x)):
                 segment = all_segments_data[key]
                 # Extract segment_id from key if not present
                 if 'segment_id' not in segment:
-                    segment['segment_id'] = int(key.split('')[1]) - 1 if '' in key else int(key)
+                    segment['segment_id'] = int(key.split('_')[1]) - 1 if '_' in key else int(key)
                 segments_list.append(segment)
             all_segments_data = segments_list
         
@@ -360,9 +361,9 @@ def process_json_file(json_file_path, api_key=None, output_path=None, audio_tran
     
     # Convert your format to expected format
     all_segments = []
-    for key in sorted(data.keys(), key=lambda x: int(x.split('')[1]) if '' in x else int(x)):
+    for key in sorted(data.keys(), key=lambda x: int(x.split('_')[1]) if '_' in x else int(x)):
         segment = data[key]
-        segment_num = int(key.split('')[1]) - 1 if '' in key else int(key)
+        segment_num = int(key.split('_')[1]) - 1 if '_' in key else int(key)
         
         # Get transcript from multiple possible sources
         transcript = segment.get('transcript') or segment.get('lecture_audio_text') or segment.get('text') or ''

@@ -1,71 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { Storage } from "@google-cloud/storage";
-import fs from "fs";
 import Busboy from "busboy";
 import { Readable } from "stream";
 import { createClient } from "@/utils/supabase/server";
-import { makeLectureId } from "@/lib/ids";
+import { getBucketName, getStorage, publicObjectUrl, safePathSegment } from "@/lib/gcp";
+import { enqueueLectureJob, parseLectureNumber } from "@/lib/jobs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-function getStorage() {
-  const projectId = process.env.GCP_PROJECT_ID;
-  const jsonEnv = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
-  const jsonPathEnv = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-  const clientEmailEnv = process.env.GCP_CLIENT_EMAIL;
-  const privateKeyEnv = process.env.GCP_PRIVATE_KEY;
-
-  if (!projectId) {
-    throw new Error("Missing GCP_PROJECT_ID env var");
-  }
-
-  let parsed: any | null = null;
-  let lastError: unknown = null;
-
-  if (jsonEnv) {
-    try {
-      const maybeDecoded = jsonEnv.trim().startsWith("{")
-        ? jsonEnv
-        : Buffer.from(jsonEnv, "base64").toString("utf8");
-      parsed = JSON.parse(maybeDecoded);
-    } catch (e) {
-      lastError = e;
-    }
-  }
-
-  if (!parsed && jsonPathEnv) {
-    try {
-      const file = fs.readFileSync(jsonPathEnv, "utf8");
-      parsed = JSON.parse(file);
-    } catch (e) {
-      lastError = e;
-    }
-  }
-
-  if (!parsed) {
-    if (clientEmailEnv && privateKeyEnv) {
-      parsed = {
-        client_email: clientEmailEnv,
-        private_key: privateKeyEnv.replace(/\\n/g, "\n"),
-      };
-    } else {
-      const hint = jsonEnv
-        ? "Invalid GOOGLE_APPLICATION_CREDENTIALS_JSON."
-        : jsonPathEnv
-        ? "Invalid GOOGLE_APPLICATION_CREDENTIALS path."
-        : "Missing credentials. Provide one of GOOGLE_APPLICATION_CREDENTIALS_JSON, GOOGLE_APPLICATION_CREDENTIALS, or both GCP_CLIENT_EMAIL and GCP_PRIVATE_KEY.";
-      throw new Error(`Failed to load GCP credentials: ${hint}`);
-    }
-  }
-
-  if (parsed.private_key && typeof parsed.private_key === "string") {
-    parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
-  }
-
-  return new Storage({ projectId, credentials: parsed });
-}
+// Server-proxied upload (multipart/form-data with fields courseId, lectureNumber,
+// lectureDate and files "audio" + "video"). The web UI uses the direct-to-GCS
+// flow in /api/upload/init instead; this route is kept for scripts/clients that
+// cannot do resumable uploads.
 
 async function uploadStreamToGCS(params: {
   bucketName: string;
@@ -74,9 +21,7 @@ async function uploadStreamToGCS(params: {
   contentType?: string | null;
 }) {
   const { bucketName, destinationPath, stream, contentType } = params;
-  const storage = getStorage();
-  const bucket = storage.bucket(bucketName);
-  const file = bucket.file(destinationPath);
+  const file = getStorage().bucket(bucketName).file(destinationPath);
 
   const writeStream = file.createWriteStream({
     resumable: true,
@@ -91,18 +36,12 @@ async function uploadStreamToGCS(params: {
     stream.on("error", reject);
   });
 
-  return `https://storage.googleapis.com/${bucketName}/${encodeURI(destinationPath)}`;
+  return publicObjectUrl(bucketName, destinationPath);
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const bucketName = process.env.GCS_BUCKET_NAME;
-    if (!bucketName) {
-      return NextResponse.json(
-        { error: "Missing GCS_BUCKET_NAME env var" },
-        { status: 500 }
-      );
-    }
+    const bucketName = getBucketName();
 
     const contentType = request.headers.get("content-type") || "";
     if (!contentType.startsWith("multipart/form-data")) {
@@ -112,30 +51,37 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    let courseId = "unknown-course";
-    let lectureNumber = "";
-    let lectureDate = "";
-
+    const fields: Record<string, string> = {};
     let audioUrl: string | undefined;
     let videoUrl: string | undefined;
+    // Assigned inside the busboy callback, so declare it without narrowing to null.
+    let formError = null as string | null;
     const promises: Promise<void>[] = [];
 
     const bb = Busboy({ headers: { "content-type": contentType } });
 
     bb.on("field", (name, val) => {
-      if (name === "courseId") courseId = val || "unknown-course";
-      if (name === "lectureNumber") lectureNumber = val || "";
-      if (name === "lectureDate") lectureDate = val || "";
+      fields[name] = val;
     });
 
     bb.on("file", (name, file, info) => {
       const { filename, mimeType } = info;
-      const ext = (filename?.split(".").pop() || "bin").toLowerCase();
-      const basePath = `courses/${courseId}/lectures/${
-        lectureNumber || "unlabeled"
-      }`;
-      const isAudio = name === "audio";
-      const destinationPath = `${basePath}/${isAudio ? "audio" : "video"}.${ext}`;
+      const lectureNumber = parseLectureNumber(fields.lectureNumber);
+
+      // Busboy streams parts in order, so the text fields must come before the files.
+      if (!fields.courseId || lectureNumber === null) {
+        formError = "Send courseId and lectureNumber fields before the audio/video files.";
+        file.resume();
+        return;
+      }
+      if (name !== "audio" && name !== "video") {
+        file.resume();
+        return;
+      }
+
+      const courseId = safePathSegment(fields.courseId, "unknown-course");
+      const ext = safePathSegment(filename?.split(".").pop()?.toLowerCase(), "bin");
+      const destinationPath = `courses/${courseId}/lectures/${lectureNumber}/${name}.${ext}`;
 
       const p = uploadStreamToGCS({
         bucketName,
@@ -143,7 +89,7 @@ export async function POST(request: NextRequest) {
         stream: file,
         contentType: mimeType,
       }).then((url) => {
-        if (isAudio) audioUrl = url; else videoUrl = url;
+        if (name === "audio") audioUrl = url; else videoUrl = url;
       });
       promises.push(p);
     });
@@ -158,6 +104,9 @@ export async function POST(request: NextRequest) {
 
     await Promise.all(promises);
 
+    if (formError) {
+      return NextResponse.json({ error: formError }, { status: 400 });
+    }
     if (!audioUrl || !videoUrl) {
       return NextResponse.json(
         { error: "Both audio and video files are required" },
@@ -165,40 +114,29 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const pathPrefix = `courses/${courseId}/lectures/${
-      lectureNumber || "unlabeled"
-    }`;
+    const courseId = fields.courseId;
+    const lectureNumber = parseLectureNumber(fields.lectureNumber)!;
+    const lectureDate = fields.lectureDate || "";
 
-    // Generate lectureId using the canonical helper
-    const lectureId = makeLectureId(courseId, lectureNumber);
-    const jobId = `proc_${Date.now()}`;
-
-    // Create job entry in Supabase for the Python worker
     const supabase = createClient();
-    const { error: dbError } = await supabase.from("lectures_processing").insert({
-      id: jobId,
-      lecture_id: lectureId,
-      status: "pending",
-      stage: "queued",
-      progress: 0,
-      audio_file: audioUrl,
-      video_file: videoUrl
+    const { jobId, lectureId } = await enqueueLectureJob(supabase, {
+      courseId,
+      lectureNumber,
+      lectureDate,
+      audioUrl,
+      videoUrl,
     });
-
-    if (dbError) {
-      console.error("Failed to insert job into Supabase:", dbError);
-      // We don't fail the upload, but the worker won't pick it up
-    }
 
     return NextResponse.json({
       success: true,
       jobId,
+      lectureId,
       audioUrl,
       videoUrl,
       courseId,
       lectureNumber,
       lectureDate,
-      pathPrefix,
+      pathPrefix: `courses/${safePathSegment(courseId, "unknown-course")}/lectures/${lectureNumber}`,
     });
   } catch (error: any) {
     console.error("Upload error:", error);
@@ -208,5 +146,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-
-

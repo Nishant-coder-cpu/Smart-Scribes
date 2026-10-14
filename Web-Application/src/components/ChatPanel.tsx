@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, Sparkles, X, MessageCircle, Copy, Check, RotateCcw } from 'lucide-react';
 import { Button } from './ui/button';
+import { Markdown } from './Markdown';
 
 interface ChatMessage {
   id: string;
@@ -12,14 +13,17 @@ interface ChatMessage {
 }
 
 interface ChatPanelProps {
-  lectureContent?: unknown;
+  /** Plain-text lecture notes used to ground the tutor's answers. */
+  lectureContent?: string | null;
   onClose?: () => void;
 }
+
+const GREETING_ID = '1';
 
 export function ChatPanel({ lectureContent, onClose }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
-      id: '1',
+      id: GREETING_ID,
       role: 'assistant',
       content: "Hello! I'm your Smart Scribes AI Tutor. Ask me any question about your lecture notes, mathematical derivations, or concept applications!",
       timestamp: new Date(),
@@ -54,9 +58,19 @@ export function ChatPanel({ lectureContent, onClose }: ChatPanelProps) {
       timestamp: new Date(),
     };
 
+    // Earlier turns (minus the canned greeting) so follow-up questions have context.
+    const history = messages
+      .filter((m) => m.id !== GREETING_ID && m.content.trim())
+      .map((m) => ({ role: m.role, content: m.content }));
+
     setMessages((prev) => [...prev, userMessage]);
     if (inputRef.current) inputRef.current.value = '';
     setIsTyping(true);
+
+    const assistantId = `${Date.now()}-assistant`;
+    const setAssistantContent = (content: string) =>
+      setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, content } : m)));
+    let received = '';
 
     try {
       const response = await fetch('/api/chat', {
@@ -66,38 +80,46 @@ export function ChatPanel({ lectureContent, onClose }: ChatPanelProps) {
         },
         body: JSON.stringify({
           message: textToSend.trim(),
-          lectureContent:
-            lectureContent == null
-              ? null
-              : typeof lectureContent === 'string'
-              ? lectureContent
-              : JSON.stringify(lectureContent),
+          lectureContent: lectureContent || null,
+          history,
         }),
       });
 
-      if (!response.ok) {
-        throw new Error('Failed to get response');
+      if (!response.ok || !response.body) {
+        const data = await response.json().catch(() => ({} as any));
+        throw new Error(data.error || `Request failed (HTTP ${response.status})`);
       }
 
-      const data = await response.json();
-
-      const assistantMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: data.response,
-        timestamp: new Date(),
-      };
-
-      setMessages((prev) => [...prev, assistantMessage]);
+      // The answer streams in as plain text; render it as it arrives.
+      setMessages((prev) => [
+        ...prev,
+        { id: assistantId, role: 'assistant', content: '', timestamp: new Date() },
+      ]);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        received += decoder.decode(value, { stream: true });
+        setAssistantContent(received);
+      }
+      received += decoder.decode();
+      setAssistantContent(received.trim() || 'Sorry, I could not produce an answer. Please try again.');
     } catch (error) {
       console.error('Error:', error);
-      const errorMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: 'I apologize, but I encountered an error connecting to the model. Please verify your credentials and try again.',
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, errorMessage]);
+      const reason = error instanceof Error ? error.message : 'unknown error';
+      if (received) {
+        // Keep what arrived and flag the interruption.
+        setAssistantContent(`${received}\n\n_(Response interrupted: ${reason})_`);
+      } else {
+        const errorMessage: ChatMessage = {
+          id: assistantId,
+          role: 'assistant',
+          content: `Sorry, I couldn't get an answer: ${reason}. Please try again.`,
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev.filter((m) => m.id !== assistantId), errorMessage]);
+      }
     } finally {
       setIsTyping(false);
     }
@@ -179,7 +201,11 @@ export function ChatPanel({ lectureContent, onClose }: ChatPanelProps) {
                     : 'bg-slate-100/90 text-slate-800 rounded-tl-xs border border-slate-200/60'
                 }`}
               >
-                <p className="whitespace-pre-line font-normal">{message.content}</p>
+                {isUser ? (
+                  <p className="whitespace-pre-line font-normal select-text">{message.content}</p>
+                ) : (
+                  <Markdown className="font-normal select-text">{message.content}</Markdown>
+                )}
 
                 <div
                   className={`flex items-center justify-between text-[10px] mt-1.5 pt-1 border-t ${
@@ -217,7 +243,7 @@ export function ChatPanel({ lectureContent, onClose }: ChatPanelProps) {
           );
         })}
 
-        {isTyping && (
+        {isTyping && messages[messages.length - 1]?.role !== 'assistant' && (
           <div className="flex gap-2.5">
             <div className="w-7 h-7 rounded-xl bg-slate-100 text-blue-700 flex items-center justify-center shrink-0 border border-slate-200">
               <Bot className="w-3.5 h-3.5" />

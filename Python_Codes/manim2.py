@@ -21,6 +21,33 @@ from llm_provider import generate_fast, generate_pro, safe_json
 
 load_dotenv()
 
+# Generated code is untrusted LLM output. This is a cheap filter for obvious
+# escapes, not a sandbox -- run the worker in an isolated container (see
+# docker-compose.yml). Word boundaries avoid false positives like "pos.x".
+FORBIDDEN_CODE_PATTERNS = [
+    r'^\s*(?:import|from)\s+(?:os|sys|subprocess|pty|shutil|socket|importlib|ctypes|requests|urllib|http|pathlib|builtins)\b',
+    r'\b__import__\b', r'\beval\s*\(', r'\bexec\s*\(', r'\bcompile\s*\(', r'(?<![\w.])open\s*\(',
+    r'\b__builtins__\b', r'\b__subclasses__\b',
+    r'\bos\.', r'\bsubprocess\.', r'\bpty\.', r'\bshutil\.', r'\bsocket\.',
+]
+
+# Environment variables the manim renderer actually needs. Everything else
+# (API keys, Supabase service key, credential paths) is withheld from the
+# subprocess that executes generated code.
+RENDER_ENV_ALLOWLIST = {
+    "PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TEMP", "TMP", "VIRTUAL_ENV", "CONDA_PREFIX",
+    "PYTHONPATH", "PYTHONIOENCODING", "MPLBACKEND", "XDG_CACHE_HOME", "FONTCONFIG_PATH",
+    # Windows needs these for Python/ffmpeg to start at all.
+    "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+}
+
+
+def render_env(base_env=None):
+    """Copy of the environment with secrets removed, for running generated code."""
+    base_env = os.environ if base_env is None else base_env
+    return {k: v for k, v in base_env.items() if k.upper() in RENDER_ENV_ALLOWLIST}
+
+
 class SmartScribesUltimateAgent:
     """
     Ultimate Production System
@@ -356,13 +383,9 @@ Return ONLY complete Python code. No markdown. No explanations. Just code."""
             with tempfile.TemporaryDirectory() as temp_dir:
                 script = os.path.join(temp_dir, "scene.py")
 
-                # Static analysis: Prevent malicious imports or shell executions
-                forbidden_patterns = [
-                    r'import\s+os', r'import\s+sys', r'import\s+subprocess', r'import\s+pty',
-                    r'__import__', r'eval\(', r'exec\(', r'open\(', r'pty\.', r'os\.', r'subprocess\.'
-                ]
-                for pattern in forbidden_patterns:
-                    if re.search(pattern, code):
+                # Static analysis: reject obvious malicious imports or shell executions
+                for pattern in FORBIDDEN_CODE_PATTERNS:
+                    if re.search(pattern, code, re.MULTILINE):
                         print(f"      ❌ Security Error: Generated code contains forbidden pattern '{pattern}'")
                         return {"success": False, "error": f"Security violation: {pattern}"}
 
@@ -400,6 +423,7 @@ Return ONLY complete Python code. No markdown. No explanations. Just code."""
                     encoding="utf-8",
                     errors="replace",
                     cwd=temp_dir,
+                    env=render_env(),
                     timeout=int(os.getenv("MANIM_RENDER_TIMEOUT", "600")),
                 )
 
@@ -495,8 +519,10 @@ Return ONLY complete Python code. No markdown. No explanations. Just code."""
             
             # Step 2: Generate code from detailed prompt
             code1 = self.generate_manim_code(plan['title'], detailed_prompt)
-            print(code1)
-            print("code")
+            if not code1:
+                print("   ❌ Code generation failed")
+                continue
+
             suggestions = self.get_manim_correction_suggestions(code1)
             code = self.apply_manim_corrections(code1, suggestions)
 

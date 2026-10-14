@@ -103,10 +103,21 @@ export interface ChatMessage {
   timestamp: Date;
 }
 
+export type LectureProcessingStatus =
+  | 'pending'
+  | 'uploading'
+  | 'processing'
+  | 'generating'
+  | 'completed'
+  | 'failed'
+
 export interface LectureProcessing {
   id: string
   lectureId: string
-  status: 'pending' | 'uploading' | 'processing' | 'generating' | 'completed' | 'failed'
+  status: LectureProcessingStatus
+  stage?: string | null
+  progress?: number | null
+  error?: string | null
   audioFile?: string
   videoFile?: string
   createdAt: string

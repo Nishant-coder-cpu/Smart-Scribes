@@ -17,7 +17,7 @@ Headers:
 import os
 import json
 import argparse
-from datetime import date
+from datetime import date, datetime, timezone
 from dotenv import load_dotenv
 import requests
 from typing import List, Dict, Optional
@@ -120,12 +120,20 @@ def create_lecture(
         print("Request failed when creating lecture:", e)
         return False
 
+# Columns of the lecture_content table. Anything else the LLM adds to the merged
+# JSON (e.g. "meta") would make PostgREST reject the whole batch.
+LECTURE_CONTENT_COLUMNS = {
+    "id", "lecture_id", "topic", "definition", "recording_url", "book_reference", "content_data",
+}
+
+
 def prepare_record(record: Dict) -> Dict:
     """
-    Ensure content_data is proper JSON (it should already be),
-    and remove any Python-only values if present.
+    Keep only real table columns, ensure content_data is proper JSON,
+    and refresh updated_at so the web app can tell the content changed.
     """
-    rec = record.copy()
+    rec = {k: v for k, v in record.items() if k in LECTURE_CONTENT_COLUMNS}
+    rec["updated_at"] = datetime.now(timezone.utc).isoformat()
     # Ensure content_data is a JSON serializable object (dict/list/primitive)
     if "content_data" in rec and rec["content_data"] is None:
         rec["content_data"] = {}  # or keep null if you prefer

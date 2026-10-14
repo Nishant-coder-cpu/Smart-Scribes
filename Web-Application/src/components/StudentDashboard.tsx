@@ -11,6 +11,7 @@ import { StudentDoubts } from './StudentDoubts';
 import { Button } from './ui/button';
 import { Course, Lecture, LectureContent as LectureContentType } from '../types';
 import { getCourses, getLectures, getLectureContent } from '../lib/api';
+import { lectureToPlainText } from '../lib/lecture-text';
 import {
   Tooltip,
   TooltipContent,
@@ -85,12 +86,6 @@ export function StudentDashboard({ onLogout }: StudentDashboardProps) {
       try {
         const content = await getLectureContent(selectedLecture);
         if (content) {
-          // Debug: print links and content to console
-          console.log('[LectureContent] Loaded for lecture:', selectedLecture);
-          console.log('[LectureContent] Recording URL:', content.recordingUrl);
-          console.log('[LectureContent] Book Reference:', content.bookReference);
-          console.log('[LectureContent] Content sections:', content.content);
-          console.log('[LectureContent] Animations:', content.animations);
           setLectureContents(prev => ({ ...prev, [selectedLecture]: content }));
         }
       } catch (error) {
@@ -110,6 +105,8 @@ export function StudentDashboard({ onLogout }: StudentDashboardProps) {
     if (!selectedLecture) return null;
     return lectureContents[selectedLecture] || null;
   };
+
+  const currentLectureText = lectureToPlainText(getCurrentContent());
 
   if (loading) {
     return (
@@ -262,7 +259,7 @@ export function StudentDashboard({ onLogout }: StudentDashboardProps) {
           {chatOpen && (
             <div className="hidden lg:block w-[350px] border-l border-slate-200 animate-in slide-in-from-right duration-200">
               <ChatPanel
-                lectureContent={getCurrentContent()?.content as unknown}
+                lectureContent={currentLectureText}
                 onClose={() => setChatOpen(false)}
               />
             </div>
@@ -290,14 +287,14 @@ export function StudentDashboard({ onLogout }: StudentDashboardProps) {
             <X className="w-5 h-5" />
           </Button>
         </div>
-        <ChatPanel onClose={() => setChatOpen(false)} />
+        <ChatPanel lectureContent={currentLectureText} onClose={() => setChatOpen(false)} />
       </div>
 
       {/* QnA Dialog */}
       <QnAGenerator 
         open={qnaDialogOpen} 
         onClose={() => setQnaDialogOpen(false)} 
-        lectureContent={getCurrentContent()?.content as unknown} 
+        lectureContent={currentLectureText} 
       />
 
       {/* Student Doubts Dialog/Page */}

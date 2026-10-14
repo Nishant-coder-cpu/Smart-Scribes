@@ -124,6 +124,8 @@ def upload_videos_to_bucket(bucket_name, course_name,lecture_id, local_video_dir
     return gcs_paths
 
 def upload_images_to_bucket(bucket_name, course_name, lecture_id, local_video_dir="segregated_images"):
+    if not os.path.isdir(local_video_dir):
+        return []
     storage_client = storage.Client()
     bucket = storage_client.bucket(bucket_name)
 
@@ -145,14 +147,16 @@ def upload_images_to_bucket(bucket_name, course_name, lecture_id, local_video_di
     print(f"\nAll {len(gcs_paths)} images uploaded successfully.")
     return gcs_paths
 
-def download_book(bucket_name, course_name):
+def download_book(bucket_name, course_name, lecture_folder=None):
+    """
+    Download the course PDF used for textbook matching.
+
+    PDFs live under courses/<course>/slides/. A PDF uploaded for this specific
+    lecture (named 'lecture<N>_...') is preferred; otherwise the first PDF is used.
+    Returns True if a PDF was downloaded.
+    """
     storage_client = storage.Client()
-    
-    try:
-        bucket = storage_client.bucket(bucket_name)
-    except Exception as e:
-        print(f"Error accessing bucket '{bucket_name}': {e}")
-        return
+    bucket = storage_client.bucket(bucket_name)
 
     book_dir = BOOK_DIR
     if os.path.exists(book_dir):
@@ -160,20 +164,33 @@ def download_book(bucket_name, course_name):
     os.makedirs(book_dir, exist_ok=True)
 
     prefix = f"courses/{course_name}/slides/"
-    blobs = bucket.list_blobs(prefix=prefix)
+    pdfs = [b for b in bucket.list_blobs(prefix=prefix) if b.name.lower().endswith(".pdf")]
 
-    found = False
-    for blob in blobs:
-        if blob.name.endswith(".pdf"):
-            local_path = BOOK_PDF_PATH
-            print(f"Downloading book: {blob.name} -> {local_path}")
-            blob.download_to_filename(local_path)
-            found = True
-
-    if not found:
+    if not pdfs:
         print(f"No PDF files found in '{prefix}'")
+        return False
+
+    chosen = pdfs[0]
+    if lecture_folder is not None:
+        lecture_tag = f"lecture{str(lecture_folder).split('-')[0]}_"
+        for blob in pdfs:
+            if os.path.basename(blob.name).startswith(lecture_tag):
+                chosen = blob
+                break
+
+    print(f"Downloading book: {chosen.name} -> {BOOK_PDF_PATH}")
+    chosen.download_to_filename(BOOK_PDF_PATH)
+    return True
 
 def filtered_images(target_dir = "segregated_images"):
+    if os.path.exists(target_dir):
+        shutil.rmtree(target_dir)
+    os.makedirs(target_dir, exist_ok=True)
+
+    if not os.path.exists(BOOK_METADATA_PATH):
+        # No course book for this lecture, so there are no book images.
+        return []
+
     with open(BOOK_METADATA_PATH, "r", encoding="utf-8") as f:
         data_image = json.load(f)
 
@@ -184,6 +201,8 @@ def filtered_images(target_dir = "segregated_images"):
 
     for topic in data_reference.get("topics", []):
         for ref in topic.get("book_references", []):
+            if not isinstance(ref, str):
+                continue
             # Extract digits after 'Page' (e.g., "Page 385")
             match = re.search(r'Page\s*(\d+)', ref)
             if match:
@@ -195,16 +214,12 @@ def filtered_images(target_dir = "segregated_images"):
 
     for el in data_image:
         if int(el["page"]) in sorted_pages:
-            if el["images"]:
-                for image in el["images"]:
-                        image_names.append((image,int(el["page"])))
-            
+            for image in el.get("images") or []:
+                # Metadata stores {"file_path", "page", "image_id"}; we need the file name.
+                image_file = os.path.basename(image["file_path"]) if isinstance(image, dict) else str(image)
+                image_names.append((image_file, int(el["page"])))
 
-        
     print(image_names)
-    if os.path.exists(target_dir):
-        shutil.rmtree(target_dir)
-    os.makedirs(target_dir, exist_ok=True)
 
     images_passed = []
 
@@ -250,7 +265,7 @@ def create_json_and_upload_images(bucket_name, course_name, lecture_id, json_pat
     for topic in data.get("topics", []):
         updated_refs = []
         for ref in topic.get("book_references", []):
-            match = re.search(r'Page\s*(\d+)', ref)
+            match = re.search(r'Page\s*(\d+)', ref) if isinstance(ref, str) else None
             if match:
                 page_num = int(match.group(1))
                 if page_num in page_to_gcs:
@@ -289,7 +304,7 @@ def update_json_and_upload_video(bucket_name, course_name, lecture_id, json_path
     for topic in data.get("topics", []):
         for anim in topic.get("animations", []):
             if anim.get("video"):
-                video_name = os.path.basename(anim["video"]).replace("\\", "/")
+                video_name = os.path.basename(anim["video"].replace("\\", "/"))
                 if video_name in gcs_map:
                     anim["video"] = gcs_map[video_name]
                     has_videoes = True

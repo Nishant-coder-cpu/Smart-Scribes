@@ -60,10 +60,10 @@ def resolve_input_files(task):
         if os.path.abspath(local_book) != os.path.abspath(config.BOOK_PDF_PATH):
             shutil.copy2(local_book, config.BOOK_PDF_PATH)
         print("Using local audio, video and PDF inputs; GCS download skipped.")
-        return local_audio, local_video
+        return local_audio, local_video, True
 
     download_lecture_files(BUCKET_NAME, task[0], task[1])
-    download_book(BUCKET_NAME, task[0])
+    has_book = download_book(BUCKET_NAME, task[0], task[1])
     file_video = os.listdir(local_dir_video)
     file_audio = os.listdir(local_dir_audio)
     if not file_video or not file_audio:
@@ -73,21 +73,30 @@ def resolve_input_files(task):
     return (
         os.path.join(local_dir_audio, file_audio[0]),
         os.path.join(local_dir_video, file_video[0]),
+        has_book,
     )
+
+
+# Heavy models (Whisper, TrOCR, BLIP, ...) are loaded once per process and
+# reused for every job the worker picks up, instead of being reloaded per lecture.
+_models = {}
+
+
+def get_models():
+    if not _models:
+        print("\nLoading all models... (This may take a moment)")
+        _models["video"] = VideoTextExtractor()
+        _models["audio"] = AudioVectorizer()
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"All models loaded successfully. Using device: {device}")
+    return _models["video"], _models["audio"]
 
 def run_pipeline(task, progress_callback=None):
     if progress_callback:
         progress_callback(5, "Downloading lecture files")
-    AUDIO_SNIPPET_FILE, VIDEO_SNIPPET_FILE = resolve_input_files(task)
+    AUDIO_SNIPPET_FILE, VIDEO_SNIPPET_FILE, has_book = resolve_input_files(task)
 
-    print("\nLoading all models... (This may take a moment)")
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(device)
-            
-    video_extractor = VideoTextExtractor()
-    audio_vectorizer = AudioVectorizer()
-            
-    print(f"All models loaded successfully. Using device: {device}")
+    video_extractor, audio_vectorizer = get_models()
 
         # --- 5. Pre-process Audio & Video ---
     if progress_callback:
@@ -160,13 +169,16 @@ def run_pipeline(task, progress_callback=None):
 
     clean_directory("output/book_images")
 
-    book_processor = BookEmbeddingProcessor()
-    chunks = book_processor.chunk_and_embed_book(
-            config.BOOK_PDF_PATH,
-            config.BOOK_NAME
-    )
-    book_processor.save_book_embeddings(chunks, config.BOOK_EMBEDDINGS_PATH)
-    print(f"✅ Book embeddings created: {len(chunks)} chunks")
+    if has_book:
+        book_processor = BookEmbeddingProcessor()
+        chunks = book_processor.chunk_and_embed_book(
+                config.BOOK_PDF_PATH,
+                config.BOOK_NAME
+        )
+        book_processor.save_book_embeddings(chunks, config.BOOK_EMBEDDINGS_PATH)
+        print(f"✅ Book embeddings created: {len(chunks)} chunks")
+    else:
+        print("⚠️ No course PDF found; continuing without textbook references.")
 
         # Step 2: Match lecture segments
     if progress_callback:
@@ -179,13 +191,16 @@ def run_pipeline(task, progress_callback=None):
             seconds_per_embedding=10,
             segment_duration_minutes=5
     )
-    matcher.load_book_database(config.BOOK_EMBEDDINGS_PATH)
+    if has_book:
+        matcher.load_book_database(config.BOOK_EMBEDDINGS_PATH)
 
     matcher.load_full_data(FULL_JSON)
 
     segment_matches = matcher.process_lecture_segments(
             fused_embeddings_path="fused_final.npy",
-            video_embeddings_path="video_embeddings.npy"
+            video_embeddings_path="video_embeddings.npy",
+            audio_embeddings_path=OUTPUT_AUDIO_FILE,
+            audio_weight=float(os.getenv("BOOK_MATCH_AUDIO_WEIGHT", "0.7")),
     )
 
     with open("lecture_book_matches.json", 'w', encoding='utf-8') as f:
@@ -225,7 +240,7 @@ def run_pipeline(task, progress_callback=None):
     
 
     if progress_callback:
-        progress_callback(90, "Processing with Gemini")
+        progress_callback(90, "Structuring lecture topics")
 
     processor = LectureProcessor("all_data.txt")
     processor.run()
@@ -235,6 +250,9 @@ def run_pipeline(task, progress_callback=None):
     output_path = Path(summary_path).with_name("merged_all_in_one_gemini.json")
 
     gemini_merge_all(summary_path, animations_path, output_path)
+
+    if progress_callback:
+        progress_callback(95, "Uploading results")
 
     update_json_and_upload_video(BUCKET_NAME,task[0],task[1])
     create_json_and_upload_images(BUCKET_NAME,task[0],task[1])

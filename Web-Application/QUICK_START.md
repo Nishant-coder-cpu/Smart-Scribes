@@ -19,6 +19,13 @@
 4. Copy ALL the content and paste into the SQL Editor
 5. Click "Run" (or press Ctrl/Cmd + Enter)
 6. You should see "Success. No rows returned" message
+7. Repeat for the remaining files, in this order:
+   - `slides_table.sql` (slides uploaded by professors)
+   - `supabase_security.sql` (profiles table + row level security)
+   - `supabase_phase2.sql` (processing jobs for the Python worker)
+   - `supabase_migration_fix_processing.sql` (safe to re-run; upgrades an older `lectures_processing` table)
+
+> Requires Node.js 22 or newer (`@supabase/supabase-js` needs the native WebSocket).
 
 ### Step 3: Get Your API Keys (30 seconds)
 1. In Supabase dashboard, go to Settings (gear icon) → API

@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Play,
@@ -35,6 +35,25 @@ import {
 
 interface LectureContentProps {
   content: LectureContentType;
+}
+
+// Notes and bookmarks are per-browser conveniences kept in localStorage.
+// Access can throw (private mode, blocked storage), so failures are ignored.
+function readStored(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStored(key: string, value: string | null) {
+  try {
+    if (value === null) window.localStorage.removeItem(key);
+    else window.localStorage.setItem(key, value);
+  } catch {
+    // ignore
+  }
 }
 
 export function LectureContent({ content }: LectureContentProps) {
@@ -76,7 +95,23 @@ export function LectureContent({ content }: LectureContentProps) {
     }
   };
 
+  const notesKey = `smart-scribes:notes:${content.lectureId}`;
+  const bookmarkKey = `smart-scribes:bookmark:${content.lectureId}`;
+
+  // Load this lecture's saved notes/bookmark whenever the lecture changes.
+  useEffect(() => {
+    setPersonalNotes(readStored(notesKey) ?? '');
+    setBookmarked(readStored(bookmarkKey) === '1');
+  }, [notesKey, bookmarkKey]);
+
+  const toggleBookmark = () => {
+    const next = !bookmarked;
+    setBookmarked(next);
+    writeStored(bookmarkKey, next ? '1' : null);
+  };
+
   const handleSaveNotes = () => {
+    writeStored(notesKey, personalNotes.trim() ? personalNotes : null);
     setNotesSaved(true);
     setTimeout(() => setNotesSaved(false), 2000);
   };
@@ -143,7 +178,7 @@ export function LectureContent({ content }: LectureContentProps) {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setBookmarked(!bookmarked)}
+                onClick={toggleBookmark}
                 className={`gap-1.5 rounded-xl text-xs font-medium border-slate-200 transition-colors ${
                   bookmarked ? 'bg-amber-50 text-amber-700 border-amber-300' : 'text-slate-600 hover:bg-slate-50'
                 }`}

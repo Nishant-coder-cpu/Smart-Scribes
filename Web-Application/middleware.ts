@@ -56,8 +56,9 @@ export async function middleware(request: NextRequest) {
 
   const { data: { user } } = await supabase.auth.getUser()
 
-  // Protect server-only sensitive API routes while allowing client app routes (chat, qna, courses)
-  const publicApiPrefixes = ['/api/auth', '/api/chat', '/api/qna', '/api/courses', '/api/doubts', '/api/lectures'];
+  // Protect server-only sensitive API routes while allowing client app routes (chat, qna, courses).
+  // /api/media must stay reachable so students can load lecture videos and images.
+  const publicApiPrefixes = ['/api/auth', '/api/chat', '/api/qna', '/api/courses', '/api/doubts', '/api/lectures', '/api/media'];
   const isPublicApi = publicApiPrefixes.some((prefix) => request.nextUrl.pathname.startsWith(prefix));
 
   if (request.nextUrl.pathname.startsWith('/api/') && !isPublicApi) {

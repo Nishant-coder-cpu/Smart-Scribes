@@ -1,10 +1,14 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Card } from "../ui/card";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
-import { getLectures, getSlides, uploadSlide } from "../../lib/api";
+import { getLectures, getSlides } from "../../lib/api";
+import { toBrowserUrl } from "../../lib/lecture-normalize";
 import { Lecture, Slide } from "../../types";
+
+/** Fired after slides are uploaded elsewhere on the page so this list refreshes. */
+export const SLIDES_UPLOADED_EVENT = "slides-uploaded";
 
 interface SlidesManagementProps {
   courseId: string;
@@ -15,80 +19,77 @@ export function SlidesManagement({ courseId }: SlidesManagementProps) {
   const [slides, setSlides] = useState<Record<string, Slide[]>>({});
   const [loading, setLoading] = useState(true);
   const [selectedLecture, setSelectedLecture] = useState<string | null>(null);
-  const [uploadData, setUploadData] = useState({
-    lectureId: "",
-    fileName: "",
-    filePath: ""
-  });
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
   const [showUploadForm, setShowUploadForm] = useState(false);
 
+  const fetchData = useCallback(async () => {
+    try {
+      const lecturesData = await getLectures(courseId);
+      setLectures(lecturesData);
+
+      // Fetch slides for each lecture
+      const slidesData: Record<string, Slide[]> = {};
+      await Promise.all(
+        lecturesData.map(async (lecture) => {
+          slidesData[lecture.id] = await getSlides(lecture.id);
+        })
+      );
+      setSlides(slidesData);
+
+      // Keep the current selection if it still exists, otherwise pick the first lecture
+      setSelectedLecture((current) =>
+        current && lecturesData.some((l) => l.id === current)
+          ? current
+          : lecturesData[0]?.id ?? null
+      );
+    } catch (error) {
+      console.error("Error fetching slides data:", error);
+    } finally {
+      setLoading(false);
+    }
+  }, [courseId]);
+
   useEffect(() => {
-    async function fetchData() {
-      try {
-        setLoading(true);
-        const lecturesData = await getLectures(courseId);
-        setLectures(lecturesData);
-        
-        // Fetch slides for each lecture
-        const slidesData: Record<string, Slide[]> = {};
-        await Promise.all(
-          lecturesData.map(async (lecture) => {
-            const lectureSlides = await getSlides(lecture.id);
-            slidesData[lecture.id] = lectureSlides;
-          })
-        );
-        
-        setSlides(slidesData);
-        
-        // Set first lecture as selected if available
-        if (lecturesData.length > 0 && !selectedLecture) {
-          setSelectedLecture(lecturesData[0].id);
-          setUploadData(prev => ({ ...prev, lectureId: lecturesData[0].id }));
-        }
-      } catch (error) {
-        console.error("Error fetching slides data:", error);
-      } finally {
-        setLoading(false);
-      }
-    }
-    
-    if (courseId) {
-      fetchData();
-    }
-  }, [courseId, selectedLecture]);
+    if (!courseId) return;
+    setLoading(true);
+    fetchData();
+    const onUploaded = () => fetchData();
+    window.addEventListener(SLIDES_UPLOADED_EVENT, onUploaded);
+    return () => window.removeEventListener(SLIDES_UPLOADED_EVENT, onUploaded);
+  }, [courseId, fetchData]);
 
   const handleLectureSelect = (lectureId: string) => {
     setSelectedLecture(lectureId);
-    setUploadData(prev => ({ ...prev, lectureId }));
   };
 
   const handleUploadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+    const lecture = lectures.find((l) => l.id === selectedLecture);
+    if (!lecture || !selectedFile) {
+      alert("Choose a PDF to upload.");
+      return;
+    }
+
     try {
-      // In a real app, this would handle file upload to storage
-      // For now, we'll just simulate adding a slide to the database
-      const newSlide = await uploadSlide({
-        lectureId: uploadData.lectureId,
-        fileName: uploadData.fileName || `slide_${Date.now()}.pdf`,
-        filePath: uploadData.filePath || `/uploads/slides/${Date.now()}.pdf`
-      });
-      
-      // Update local state
-      setSlides(prev => ({
-        ...prev,
-        [uploadData.lectureId]: [...(prev[uploadData.lectureId] || []), newSlide]
-      }));
-      
-      // Reset form
-      setUploadData({
-        lectureId: selectedLecture || "",
-        fileName: "",
-        filePath: ""
-      });
+      setIsUploading(true);
+      const form = new FormData();
+      form.append("file", selectedFile);
+      form.append("courseId", courseId);
+      form.append("lectureNumber", String(lecture.number));
+      form.append("date", lecture.date || "");
+      const res = await fetch("/api/upload/slides", { method: "POST", body: form });
+      const body = await res.json().catch(() => ({} as any));
+      if (!res.ok) throw new Error((body as any).error || "Slide upload failed");
+
+      await fetchData();
+      setSelectedFile(null);
       setShowUploadForm(false);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error uploading slide:", error);
+      alert(error?.message || "Slide upload failed");
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -164,24 +165,16 @@ export function SlidesManagement({ courseId }: SlidesManagementProps) {
                           type="file"
                           accept=".pdf"
                           className="w-full"
-                          onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            if (file) {
-                              setUploadData(prev => ({
-                                ...prev,
-                                fileName: file.name,
-                                filePath: `/uploads/slides/${file.name}`
-                              }));
-                            }
-                          }}
+                          onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
                         />
                       </div>
                       
                       <Button
                         type="submit"
+                        disabled={!selectedFile || isUploading}
                         className="w-full bg-blue-600 hover:bg-blue-700 text-white"
                       >
-                        Upload Slide
+                        {isUploading ? "Uploading..." : "Upload Slide"}
                       </Button>
                     </div>
                   </form>
@@ -203,10 +196,8 @@ export function SlidesManagement({ courseId }: SlidesManagementProps) {
                             size="sm"
                             variant="outline"
                             className="text-blue-600 border-blue-200 hover:bg-blue-50"
-                            onClick={() => {
-                              // In a real app, this would open the slide
-                              alert(`Viewing slide: ${slide.fileName}`);
-                            }}
+                            disabled={!/^(https?|gs):\/\//.test(slide.filePath)}
+                            onClick={() => window.open(toBrowserUrl(slide.filePath), "_blank", "noopener,noreferrer")}
                           >
                             View
                           </Button>

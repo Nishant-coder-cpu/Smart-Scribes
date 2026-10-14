@@ -51,3 +51,10 @@ CREATE POLICY "Students can insert doubts" ON doubts FOR INSERT WITH CHECK (
 CREATE POLICY "Professors can update doubts (reply)" ON doubts FOR UPDATE USING (
     EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'professor')
 );
+
+-- Slides: everyone can read, professors can upload (requires slides_table.sql)
+ALTER TABLE slides ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Slides are readable by everyone" ON slides FOR SELECT USING (true);
+CREATE POLICY "Professors can insert slides" ON slides FOR INSERT WITH CHECK (
+    EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'professor')
+);

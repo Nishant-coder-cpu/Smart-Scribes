@@ -4,7 +4,25 @@ import { Input } from "../ui/input";
 import { Card } from "../ui/card";
 import { FileAudio, FileVideo, Hash, Calendar } from "lucide-react";
 import { Course } from "../../types/index";
-import { getLectures, createLecture } from "../../lib/api";
+
+/** Fired after a job is queued so the processing status card refreshes. */
+export const LECTURE_JOB_QUEUED_EVENT = "lecture-job-queued";
+
+// fetch() cannot report upload progress, so PUT the file with XMLHttpRequest.
+function putFileWithProgress(uploadUrl: string, file: File, onProgress: (loaded: number) => void) {
+  return new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", uploadUrl);
+    if (file.type) xhr.setRequestHeader("Content-Type", file.type);
+    xhr.upload.onprogress = (e) => onProgress(e.loaded);
+    xhr.onload = () =>
+      xhr.status >= 200 && xhr.status < 300
+        ? resolve()
+        : reject(new Error(`Upload to cloud storage failed (HTTP ${xhr.status})`));
+    xhr.onerror = () => reject(new Error("Network error while uploading to cloud storage"));
+    xhr.send(file);
+  });
+}
 
 interface CourseUploadProps {
   selectedCourse: Course;
@@ -13,7 +31,7 @@ interface CourseUploadProps {
   lectureDate: string;
   setLectureDate: (value: string) => void;
   handleFileUpload: (e: React.ChangeEvent<HTMLInputElement>, type: "slides" | "audio" | "video") => void;
-  handleGenerateContent: () => void;
+  onLectureQueued: (lecture: { lectureNumber: string; date: string; audioFile: string; videoFile: string }) => void;
   pendingAudioFile: File | null;
   pendingVideoFile: File | null;
 }
@@ -25,11 +43,12 @@ export function CourseUpload({
   lectureDate,
   setLectureDate,
   handleFileUpload,
-  handleGenerateContent,
+  onLectureQueued,
   pendingAudioFile,
   pendingVideoFile,
 }: CourseUploadProps) {
   const [isUploading, setIsUploading] = React.useState(false);
+  const [uploadPercent, setUploadPercent] = React.useState<number | null>(null);
 
   const canUploadBoth = Boolean(
     selectedCourse.materials?.audio &&
@@ -40,14 +59,21 @@ export function CourseUpload({
 
   const handleUploadBoth = async () => {
     if (!canUploadBoth) return;
+    const audioFile = pendingAudioFile;
+    const videoFile = pendingVideoFile;
+    if (!audioFile || !videoFile) {
+      alert("Please choose both audio and video files.");
+      return;
+    }
+    const lectureNum = Number(lectureNumber);
+    if (!Number.isInteger(lectureNum) || lectureNum <= 0) {
+      alert("Lecture number must be a positive whole number.");
+      return;
+    }
+
     try {
       setIsUploading(true);
-      const audioFile = pendingAudioFile;
-      const videoFile = pendingVideoFile;
-      if (!audioFile || !videoFile) {
-        alert("Please choose both audio and video files.");
-        return;
-      }
+      setUploadPercent(0);
 
       // Direct-to-GCS resumable uploads for audio and video
       async function initResumable(kind: 'audio' | 'video', file: File) {
@@ -56,7 +82,7 @@ export function CourseUpload({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             courseId: selectedCourse.id,
-            lectureNumber,
+            lectureNumber: String(lectureNum),
             lectureDate,
             kind,
             filename: file.name,
@@ -70,85 +96,53 @@ export function CourseUpload({
         return initRes.json() as Promise<{ uploadUrl: string; destinationPath: string; pathPrefix: string }>
       }
 
-      async function putFile(uploadUrl: string, file: File) {
-        const putRes = await fetch(uploadUrl, {
-          method: 'PUT',
-          headers: { 'Content-Type': file.type },
-          body: file,
-        });
-        if (!putRes.ok) throw new Error('Upload to GCS failed');
-      }
-
       const [audioInit, videoInit] = await Promise.all([
         initResumable('audio', audioFile),
         initResumable('video', videoFile),
       ]);
 
+      const totalBytes = audioFile.size + videoFile.size || 1;
+      const loaded = { audio: 0, video: 0 };
+      const report = () => setUploadPercent(Math.round(((loaded.audio + loaded.video) / totalBytes) * 100));
       await Promise.all([
-        putFile(audioInit.uploadUrl, audioFile),
-        putFile(videoInit.uploadUrl, videoFile),
+        putFileWithProgress(audioInit.uploadUrl, audioFile, (n) => { loaded.audio = n; report(); }),
+        putFileWithProgress(videoInit.uploadUrl, videoFile, (n) => { loaded.video = n; report(); }),
       ]);
 
-      const bucketName = process.env.NEXT_PUBLIC_GCS_BUCKET_NAME || 'smart-scribes';
-      const data = {
-        audioUrl: `https://storage.googleapis.com/${bucketName}/${encodeURI(audioInit.destinationPath)}`,
-        videoUrl: `https://storage.googleapis.com/${bucketName}/${encodeURI(videoInit.destinationPath)}`,
-      } as const;
+      const bucket = process.env.NEXT_PUBLIC_GCS_BUCKET_NAME || 'smart-scribes';
+      const toUrl = (p: string) =>
+        `https://storage.googleapis.com/${bucket}/${p.split('/').map(encodeURIComponent).join('/')}`;
+      const audioUrl = toUrl(audioInit.destinationPath);
+      const videoUrl = toUrl(videoInit.destinationPath);
 
-      const evt = new CustomEvent("gcs-upload-completed", {
-        detail: {
-          audioUrl: data.audioUrl as string,
-          videoUrl: data.videoUrl as string,
-        },
-      });
-      window.dispatchEvent(evt);
-      alert("✅ Files uploaded to cloud successfully.");
-
-      // The parent lecture must exist before its background job is queued.
-      const courseId = selectedCourse.id;
-      const lectureNum = Number(lectureNumber);
-      // Try to find an existing lecture for this course and number
-      let lectureId: string | null = null;
-      try {
-        const lectures = await getLectures(courseId);
-        const existing = lectures.find(l => l.number === lectureNum);
-        if (existing) {
-          lectureId = existing.id;
-        } else {
-          const created = await createLecture({
-            topic: `Lecture ${lectureNum}`,
-            date: lectureDate,
-            number: lectureNum,
-            courseId,
-          });
-          lectureId = created.id;
-        }
-      } catch (err) {
-        console.error("Failed ensuring lecture exists:", err);
-      }
-
-      if (!lectureId) {
-        throw new Error("Could not create the lecture record before queueing it.");
-      }
-
-      const jobResponse = await fetch("/api/jobs/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      // Queue the job for the Python worker (it only picks up 'pending' jobs).
+      // The API also creates the lecture row if it does not exist yet.
+      const jobRes = await fetch('/api/jobs/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          courseId,
-          lectureNumber,
-          audioUrl: data.audioUrl,
-          videoUrl: data.videoUrl,
+          courseId: selectedCourse.id,
+          lectureNumber: lectureNum,
+          lectureDate,
+          audioUrl,
+          videoUrl,
         }),
       });
-      if (!jobResponse.ok) {
-        const body = await jobResponse.json().catch(() => ({}));
-        throw new Error(body.error || "Failed to queue the processing job");
+      if (!jobRes.ok) {
+        const e = await jobRes.json().catch(() => ({} as any));
+        throw new Error(
+          `Files were uploaded, but queuing processing failed: ${(e as any).error || jobRes.statusText}`
+        );
       }
+
+      window.dispatchEvent(new CustomEvent(LECTURE_JOB_QUEUED_EVENT));
+      onLectureQueued({ lectureNumber: String(lectureNum), date: lectureDate, audioFile: audioUrl, videoFile: videoUrl });
+      alert(`✅ Lecture ${lectureNum} uploaded and queued for processing.`);
     } catch (e: any) {
       alert(e.message || "Upload failed");
     } finally {
       setIsUploading(false);
+      setUploadPercent(null);
     }
   };
   return (
@@ -228,6 +222,8 @@ export function CourseUpload({
               <Hash className="text-purple-600" />
               <Input
                 type="number"
+                min={1}
+                step={1}
                 placeholder="Lecture Number"
                 value={lectureNumber}
                 onChange={(e) => setLectureNumber(e.target.value)}
@@ -242,9 +238,21 @@ export function CourseUpload({
               />
             </div>
             <Button onClick={handleUploadBoth} disabled={!canUploadBoth || isUploading} className="bg-purple-600 hover:bg-purple-700 text-white px-6">
-              {isUploading ? "Processing..." : "Process Lecture Content"}
+              {isUploading
+                ? uploadPercent !== null && uploadPercent < 100
+                  ? `Uploading ${uploadPercent}%`
+                  : "Queuing..."
+                : "Process Lecture Content"}
             </Button>
           </div>
+          {uploadPercent !== null && (
+            <div className="mt-4 h-2 w-full rounded-full bg-purple-100 overflow-hidden">
+              <div
+                className="h-full bg-purple-600 transition-all"
+                style={{ width: `${uploadPercent}%` }}
+              />
+            </div>
+          )}
         </div>
       )}
 

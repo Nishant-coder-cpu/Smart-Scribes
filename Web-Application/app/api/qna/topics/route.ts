@@ -14,9 +14,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const geminiApiKey = process.env.GEMINI_API_KEY;
     // Generate topic recommendations
-    const topics = await recommendTopics(lectureContent, geminiApiKey);
+    const topics = await recommendTopics(lectureContent);
 
     return NextResponse.json({
       topics,

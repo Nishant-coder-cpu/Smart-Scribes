@@ -8,6 +8,7 @@ import {
   Slide
 } from '../types'
 import { makeLectureId } from './ids'
+import { normalizeContentData, toBrowserUrl } from './lecture-normalize'
 
 // Institute API
 export async function getInstitutes(): Promise<Institute[]> {
@@ -112,16 +113,17 @@ export async function getLectureContent(lectureId: string): Promise<LectureConte
     throw error
   }
 
+  const normalized = normalizeContentData(data.content_data)
   return {
     lectureId: data.lecture_id,
     topic: data.topic,
     definition: data.definition || '',
-    recordingUrl: data.recording_url || '',
-    bookReference: data.book_reference || '',
-    content: data.content_data.content || [],
-    doubts: data.content_data.doubts || [],
-    examples: data.content_data.examples || [],
-    animations: data.content_data.animations || []
+    recordingUrl: toBrowserUrl(data.recording_url),
+    bookReference: data.book_reference || normalized.textReferences.join('\n'),
+    content: normalized.content,
+    doubts: normalized.doubts,
+    examples: normalized.examples,
+    animations: normalized.animations
   }
 }
 
@@ -182,64 +184,20 @@ export async function getStudentDoubts(): Promise<StudentDoubt[]> {
   })) || []
 }
 
-export async function getProfessorDoubts() {
-  const { data, error } = await supabase
-    .from('doubts')
-    .select('*')
-    .order('date', { ascending: false })
-
-  if (error) throw error
-  return data || []
+export async function getProfessorDoubts(): Promise<ProfessorDoubt[]> {
+  // Same rows as students see; mapped from snake_case columns to the UI shape.
+  return getStudentDoubts()
 }
 
 // Lecture Processing API
-export async function getLectureProcessing(lectureId: string): Promise<LectureProcessing | null> {
-  const { data, error } = await supabase
-    .from('lectures_processing')
-    .select('*')
-    .eq('lecture_id', lectureId)
-    .single()
-
-  if (error) {
-    if (error.code === 'PGRST116') return null // No rows returned
-    throw error
-  }
-  
-  return data ? {
-    id: data.id,
-    lectureId: data.lecture_id,
-    status: data.status,
-    audioFile: data.audio_file,
-    videoFile: data.video_file,
-    createdAt: data.created_at,
-    updatedAt: data.updated_at
-  } : null
-}
-
-export async function createLectureProcessing(processing: {
-  lectureId: string,
-  audioFile?: string,
-  videoFile?: string
-}): Promise<LectureProcessing> {
-  const id = `proc_${Date.now()}`
-  const { data, error } = await supabase
-    .from('lectures_processing')
-    .insert({
-      id,
-      lecture_id: processing.lectureId,
-      status: 'uploading',
-      audio_file: processing.audioFile,
-      video_file: processing.videoFile
-    })
-    .select()
-    .single()
-
-  if (error) throw error
-  
+function mapProcessingRow(data: any): LectureProcessing {
   return {
     id: data.id,
     lectureId: data.lecture_id,
     status: data.status,
+    stage: data.stage ?? null,
+    progress: data.progress ?? null,
+    error: data.error ?? null,
     audioFile: data.audio_file,
     videoFile: data.video_file,
     createdAt: data.created_at,
@@ -247,10 +205,35 @@ export async function createLectureProcessing(processing: {
   }
 }
 
-export async function updateLectureProcessingStatus(id: string, status: LectureProcessing['status']): Promise<void> {
+/** Most recent processing job for each of the given lectures. */
+export async function getLatestProcessingJobs(lectureIds: string[]): Promise<LectureProcessing[]> {
+  if (lectureIds.length === 0) return []
+  const { data, error } = await supabase
+    .from('lectures_processing')
+    .select('*')
+    .in('lecture_id', lectureIds)
+    .order('created_at', { ascending: false })
+
+  if (error) throw error
+
+  // A lecture can be re-uploaded, so keep only its newest job.
+  const latest = new Map<string, LectureProcessing>()
+  for (const row of data || []) {
+    if (!latest.has(row.lecture_id)) latest.set(row.lecture_id, mapProcessingRow(row))
+  }
+  return Array.from(latest.values())
+}
+
+export async function getLectureProcessing(lectureId: string): Promise<LectureProcessing | null> {
+  const [job] = await getLatestProcessingJobs([lectureId])
+  return job ?? null
+}
+
+/** Put a failed job back in the queue for the worker. */
+export async function retryLectureProcessing(id: string): Promise<void> {
   const { error } = await supabase
     .from('lectures_processing')
-    .update({ status })
+    .update({ status: 'pending', stage: 'queued', progress: 0, error: null })
     .eq('id', id)
 
   if (error) throw error
@@ -273,34 +256,6 @@ export async function getSlides(lectureId: string): Promise<Slide[]> {
     filePath: slide.file_path,
     uploadDate: slide.upload_date
   })) || []
-}
-
-export async function uploadSlide(slide: {
-  lectureId: string,
-  fileName: string,
-  filePath: string
-}): Promise<Slide> {
-  const id = `slide_${Date.now()}`
-  const { data, error } = await supabase
-    .from('slides')
-    .insert({
-      id,
-      lecture_id: slide.lectureId,
-      file_name: slide.fileName,
-      file_path: slide.filePath
-    })
-    .select()
-    .single()
-
-  if (error) throw error
-  
-  return {
-    id: data.id,
-    lectureId: data.lecture_id,
-    fileName: data.file_name,
-    filePath: data.file_path,
-    uploadDate: data.upload_date
-  }
 }
 
 

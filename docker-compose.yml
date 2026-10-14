@@ -1,0 +1,44 @@
+# Runs the Python processing worker in an isolated, unprivileged container.
+#
+#   1. Put your service-account key at Python_Codes/gcp-key.json
+#      (or set GCP_KEY_FILE=/path/to/key.json)
+#   2. Fill in Python_Codes/.env (see Python_Codes/.env.example)
+#   3. docker compose up --build worker
+#
+# GPU: install the NVIDIA Container Toolkit and uncomment the `deploy` block.
+services:
+  worker:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+    env_file: Python_Codes/.env
+    environment:
+      # Container paths override any host (e.g. Windows) paths in .env.
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/gcp-key.json
+      HF_HOME: /home/scribe/.cache/huggingface
+      FFMPEG_PATH: /usr/bin/ffmpeg
+      MANIM_EXECUTABLE: manim
+      PIPELINE_LOCAL_AUDIO: ""
+      PIPELINE_LOCAL_VIDEO: ""
+      PIPELINE_LOCAL_BOOK: ""
+    volumes:
+      - ${GCP_KEY_FILE:-./Python_Codes/gcp-key.json}:/run/secrets/gcp-key.json:ro
+      - model-cache:/home/scribe/.cache
+    # Hardening: the worker executes LLM-generated rendering code.
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: 16g
+    restart: unless-stopped
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+volumes:
+  model-cache:

@@ -2,7 +2,44 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import normalize
 import numpy as np
 import json
-from .pdf_embedding import BookEmbeddingProcessor
+
+# Default share of the speech transcript when blending it with on-screen text.
+# The lecturer's words describe the concepts; OCR/captions are often noisy.
+DEFAULT_AUDIO_WEIGHT = 0.7
+
+
+def combine_embeddings(audio_embeddings, video_embeddings, transcripts=None, audio_weight=DEFAULT_AUDIO_WEIGHT):
+    """
+    Blend per-segment audio (transcript) and video (OCR/caption) embeddings.
+
+    Both come from the same sentence-transformer as the book chunks, so they live
+    in the same space. Each side is L2-normalized; a side with no content (empty
+    transcript or an all-zero video vector) gets weight 0, so silent segments
+    fall back to the screen text and vice versa. Rows with neither are zero.
+    """
+    video = np.asarray(video_embeddings, dtype=float)
+    if audio_embeddings is None:
+        return video
+    audio = np.asarray(audio_embeddings, dtype=float)
+    n = min(len(audio), len(video))
+    audio, video = audio[:n], video[:n]
+
+    audio_norm = np.linalg.norm(audio, axis=1, keepdims=True)
+    video_norm = np.linalg.norm(video, axis=1, keepdims=True)
+    audio_unit = np.divide(audio, audio_norm, out=np.zeros_like(audio), where=audio_norm > 0)
+    video_unit = np.divide(video, video_norm, out=np.zeros_like(video), where=video_norm > 0)
+
+    has_audio = (audio_norm[:, 0] > 0)
+    if transcripts is not None:
+        padded = list(transcripts[:n]) + [""] * (n - len(transcripts[:n]))
+        has_audio &= np.array([bool((t or "").strip()) for t in padded], dtype=bool)
+    has_video = video_norm[:, 0] > 0
+
+    wa = np.where(has_audio, audio_weight, 0.0)[:, None]
+    wv = np.where(has_video, 1.0 - audio_weight, 0.0)[:, None]
+    total = wa + wv
+    blended = wa * audio_unit + wv * video_unit
+    return np.divide(blended, total, out=np.zeros_like(blended), where=total > 0)
 
 
 class LectureBookMatcher:
@@ -29,6 +66,8 @@ class LectureBookMatcher:
 
     def load_book_database(self, book_embeddings_path):
         """Load book embeddings from file"""
+        # Imported lazily: it pulls in PyMuPDF and the embedding model.
+        from .pdf_embedding import BookEmbeddingProcessor
         processor = BookEmbeddingProcessor()
         book_embeddings, book_metadata = processor.load_book_embeddings(book_embeddings_path)
         self.book_embeddings = normalize(book_embeddings, axis=1)
@@ -80,6 +119,16 @@ class LectureBookMatcher:
         Returns:
             List of relevant book sections with similarity scores
         """
+        # No course book was available for this lecture.
+        if self.book_embeddings is None or len(self.book_embeddings) == 0:
+            return []
+
+        # Segments with no text at all have all-zero embeddings; they carry no
+        # signal and would only drag the average similarity down.
+        lecture_embeddings_batch = [e for e in lecture_embeddings_batch if np.any(e)]
+        if not lecture_embeddings_batch:
+            return []
+
         all_similarities = []
         
         # Calculate similarities for each embedding in the batch
@@ -181,7 +230,13 @@ class LectureBookMatcher:
             "transcript": " ".join(transcripts),
             "video_text": " ".join(video_texts),}
 
-    def process_lecture_segments(self, fused_embeddings_path, video_embeddings_path):
+    def segment_transcripts(self, count):
+        """Cleaned transcript per 10-second segment, in order, from full_data.json."""
+        data = self.full_data or {}
+        return [(data.get(f"segment_{i + 1}") or {}).get("transcript", "") for i in range(count)]
+
+    def process_lecture_segments(self, fused_embeddings_path, video_embeddings_path,
+                                 audio_embeddings_path=None, audio_weight=DEFAULT_AUDIO_WEIGHT):
         """
         Process all lecture segments and match with books
         Each 5-minute segment contains 30 embeddings (10 seconds each)
@@ -190,8 +245,16 @@ class LectureBookMatcher:
             List of segment data with book references, transcripts, and context
         """
         # Load embeddings
-        fused_embeddings = np.load(fused_embeddings_path)
         video_embeddings = np.load(video_embeddings_path)
+        if audio_embeddings_path:
+            audio_embeddings = np.load(audio_embeddings_path)
+            video_embeddings = combine_embeddings(
+                audio_embeddings,
+                video_embeddings,
+                self.segment_transcripts(len(video_embeddings)),
+                audio_weight,
+            )
+            print(f"   Matching on audio+video embeddings (audio weight {audio_weight})")
 
         total_embeddings = len(video_embeddings)
         print(f"\n✅ Total embeddings loaded: {total_embeddings}")

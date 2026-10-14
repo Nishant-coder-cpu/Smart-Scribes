@@ -1,0 +1,23 @@
+.git
+**/.env
+**/.env.*
+!**/.env.example
+**/*-key.json
+**/smart-scribe-*.json
+**/__pycache__
+Web-Application
+Model Training NoteBooks
+Python_Codes/.hf-cache*
+Python_Codes/audio_full
+Python_Codes/video_full
+Python_Codes/frames_temp
+Python_Codes/book
+Python_Codes/book_embeddings
+Python_Codes/output
+Python_Codes/segregated_images
+Python_Codes/smart_scribes_animations
+Python_Codes/*.npy
+Python_Codes/*.mp3
+Python_Codes/*.mp4
+Python_Codes/*.pdf
+*.mp4
