@@ -37,6 +37,43 @@ interface LectureContentProps {
   content: LectureContentType;
 }
 
+function LazyAnimationVideo({ src }: { src: string }) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [shouldLoad, setShouldLoad] = useState(false);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (typeof IntersectionObserver === 'undefined') {
+      setShouldLoad(true);
+      return;
+    }
+
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry?.isIntersecting) {
+        setShouldLoad(true);
+        observer.disconnect();
+      }
+    }, { rootMargin: '300px 0px' });
+    observer.observe(video);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <video
+      ref={videoRef}
+      src={shouldLoad ? src : undefined}
+      controls
+      autoPlay={shouldLoad}
+      loop
+      muted
+      playsInline
+      preload={shouldLoad ? 'metadata' : 'none'}
+      className="w-full h-full object-cover"
+    />
+  );
+}
+
 // Notes and bookmarks are per-browser conveniences kept in localStorage.
 // Access can throw (private mode, blocked storage), so failures are ignored.
 function readStored(key: string): string | null {
@@ -495,15 +532,7 @@ export function LectureContent({ content }: LectureContentProps) {
                           >
                             <Card className="overflow-hidden border border-slate-200/90 rounded-xl shadow-xs bg-white">
                               <div className="relative aspect-video bg-slate-900">
-                                <video
-                                  src={section.animation.thumbnail}
-                                  controls
-                                  autoPlay
-                                  loop
-                                  muted
-                                  playsInline
-                                  className="w-full h-full object-cover"
-                                />
+                                <LazyAnimationVideo src={section.animation.thumbnail} />
                                 <Badge className="absolute top-2 right-2 text-[10px] bg-slate-900/80 text-white backdrop-blur-xs">
                                   {section.animation.type}
                                 </Badge>
@@ -579,15 +608,7 @@ export function LectureContent({ content }: LectureContentProps) {
                     className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xs hover:shadow-sm transition-all"
                   >
                     <div className="relative aspect-video bg-slate-900">
-                      <video
-                        src={animation.thumbnail}
-                        controls
-                        autoPlay
-                        loop
-                        muted
-                        playsInline
-                        className="w-full h-full object-cover"
-                      />
+                      <LazyAnimationVideo src={animation.thumbnail} />
                       <Badge className="absolute top-2 right-2 text-[10px] bg-slate-900/80 text-white backdrop-blur-xs">
                         {animation.type}
                       </Badge>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isAllowedMediaPath, parseByteRange, publicObjectUrl, safePathSegment } from "../gcp";
+import { getGcpProjectId, isAllowedMediaPath, parseByteRange, publicObjectUrl, safePathSegment } from "../gcp";
 import { parseLectureNumber } from "../jobs";
 import { makeLectureId } from "../ids";
 
@@ -29,6 +29,20 @@ describe("publicObjectUrl", () => {
     expect(publicObjectUrl("b", "courses/a b/c#d.mp4")).toBe(
       "https://storage.googleapis.com/b/courses/a%20b/c%23d.mp4"
     );
+  });
+});
+
+describe("getGcpProjectId", () => {
+  it("prefers the service-account project over a stale environment project", () => {
+    const originalProjectId = process.env.GCP_PROJECT_ID;
+    process.env.GCP_PROJECT_ID = "stale-project-number";
+
+    try {
+      expect(getGcpProjectId({ project_id: "service-account-project" })).toBe("service-account-project");
+    } finally {
+      if (originalProjectId === undefined) delete process.env.GCP_PROJECT_ID;
+      else process.env.GCP_PROJECT_ID = originalProjectId;
+    }
   });
 });
 

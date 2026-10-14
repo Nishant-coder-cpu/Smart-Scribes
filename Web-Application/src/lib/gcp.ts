@@ -53,7 +53,7 @@ export function loadGcpCredentials(): Record<string, any> | null {
 }
 
 export function getGcpProjectId(credentials?: Record<string, any> | null): string | undefined {
-  return process.env.GCP_PROJECT_ID || credentials?.project_id;
+  return credentials?.project_id || process.env.GCP_PROJECT_ID;
 }
 
 export function getStorage(): Storage {
