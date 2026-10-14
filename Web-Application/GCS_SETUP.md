@@ -48,12 +48,9 @@ Notes:
    - Location/Region: choose near your users.
    - Default storage class: Standard (or per your cost profile).
    - Keep “Uniform access” enabled.
-3. Make objects publicly readable (two options):
-   - EITHER set bucket-level public access:
-     - Permissions → Grant access: `allUsers` → Role: `Storage Object Viewer`.
-     - Or enable “Public access” guided policy in the UI.
-   - OR keep it private and serve via signed URLs. This repo’s API currently calls `file.makePublic()`; if you prefer private objects, remove that call and serve via signed URLs.
-
+3. Decide how lecture media is read:
+   - **Private bucket (recommended):** keep public access off. The app serves media through `/api/media`, which redirects to short-lived V4 signed URLs. The service account key must include its private key (key files do).
+   - **Public bucket:** grant `allUsers` the `Storage Object Viewer` role. `/api/media` still works, and falls back to public URLs if signing fails.
 ### 4) Create a service account and key
 
 1. IAM & Admin → Service Accounts → Create Service Account.
@@ -83,6 +80,6 @@ Expected behavior:
 - Missing env var: API will respond with a 500 and a helpful error message.
 - `private_key` invalid: ensure `\n` are literal in `.env.local` and not real newlines.
 - Access denied (403): verify bucket name, service account roles, and that the project ID matches the bucket’s project.
-- Public access blocked: remove org/bucket policies that block public access, or switch to signed URLs and remove `makePublic()` from the API code.
+- Media won't load with a private bucket: check the server logs for "Could not sign media URL". The service account needs a private key (a JSON key file) and `Storage Object Viewer` on the bucket.
 
 
