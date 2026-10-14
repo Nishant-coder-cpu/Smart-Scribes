@@ -233,7 +233,42 @@ export function LandingPage({ onLogin }: LandingPageProps) {
       }
     }
     loadInstitutes();
+
+    // Restore draft form state on reload
+    try {
+      const raw = window.localStorage.getItem('smart-scribes:landing-draft');
+      if (raw) {
+        const draft = JSON.parse(raw);
+        if (draft.selectedRole) setSelectedRole(draft.selectedRole);
+        if (draft.selectedInstitute) setSelectedInstitute(draft.selectedInstitute);
+        if (draft.studentGmail) setStudentGmail(draft.studentGmail);
+        if (draft.studentCourse) setStudentCourse(draft.studentCourse);
+        if (draft.studentYear) setStudentYear(draft.studentYear);
+        if (draft.profGmail) setProfGmail(draft.profGmail);
+      }
+    } catch {
+      // ignore
+    }
   }, []);
+
+  // Save draft selections so reload preserves them
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        'smart-scribes:landing-draft',
+        JSON.stringify({
+          selectedRole,
+          selectedInstitute,
+          studentGmail,
+          studentCourse,
+          studentYear,
+          profGmail,
+        })
+      );
+    } catch {
+      // ignore
+    }
+  }, [selectedRole, selectedInstitute, studentGmail, studentCourse, studentYear, profGmail]);
 
   const initialInstitutesToShow = 6;
   const visibleInstitutes = showAllInstitutes ? institutes : institutes.slice(0, initialInstitutesToShow);
@@ -259,6 +294,11 @@ export function LandingPage({ onLogin }: LandingPageProps) {
           alert('Please enter a valid Gmail or use demo Gmail');
           return;
         }
+      }
+      try {
+        window.localStorage.removeItem('smart-scribes:landing-draft');
+      } catch {
+        // ignore
       }
       onLogin(selectedRole, selectedInstitute);
     }

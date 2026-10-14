@@ -15,16 +15,22 @@ import { DoubtsSection } from "./professor/DoubtsSection";
 import { LectureProcessing } from "./professor/LectureProcessing";
 import { SlidesManagement, SLIDES_UPLOADED_EVENT } from "./professor/SlidesManagement";
 import { Card } from "./ui/card";
+import {
+  getNavigationSession,
+  saveNavigationSession,
+  onNavigationSessionChange,
+} from "../lib/navigation-state";
 
 interface ProfessorDashboardProps {
   onLogout: () => void;
 }
 
 export function ProfessorDashboard({ onLogout }: ProfessorDashboardProps) {
+  const initialSession = getNavigationSession();
   const [courses, setCourses] = useState<Course[]>([]);
   const [doubts, setDoubts] = useState<ProfessorDoubt[]>([]);
-  const [selectedCourseId, setSelectedCourseId] = useState<string | null>(null);
-  const [view, setView] = useState<"courses" | "doubts">("courses");
+  const [selectedCourseId, setSelectedCourseId] = useState<string | null>(initialSession.courseId || null);
+  const [view, setView] = useState<"courses" | "doubts">(initialSession.view || "courses");
   const [isAddingCourse, setIsAddingCourse] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -66,6 +72,14 @@ export function ProfessorDashboard({ onLogout }: ProfessorDashboardProps) {
 
         const doubtsData = await getProfessorDoubts();
         setDoubts(doubtsData);
+
+        // Restore selected course or fallback to first course
+        if (mappedCourses.length > 0) {
+          const session = getNavigationSession();
+          const targetId = session.courseId || selectedCourseId;
+          const matched = mappedCourses.find((c) => c.id === targetId);
+          setSelectedCourseId(matched ? matched.id : mappedCourses[0].id);
+        }
       } catch (error) {
         console.error("Error loading data:", error);
       } finally {
@@ -74,6 +88,45 @@ export function ProfessorDashboard({ onLogout }: ProfessorDashboardProps) {
     }
     loadData();
   }, []);
+
+  // Sync state changes with session and URL
+  useEffect(() => {
+    if (!loading) {
+      saveNavigationSession({
+        role: "professor",
+        view,
+        courseId: selectedCourseId,
+      });
+    }
+  }, [loading, view, selectedCourseId]);
+
+  // Keep state in sync when user navigates using browser Back/Forward
+  useEffect(() => {
+    return onNavigationSessionChange((session) => {
+      if (session.view && session.view !== view) {
+        setView(session.view);
+      }
+      if (session.courseId && session.courseId !== selectedCourseId) {
+        setSelectedCourseId(session.courseId);
+      }
+    });
+  }, [view, selectedCourseId]);
+
+  const handleViewChange = (newView: "courses" | "doubts") => {
+    setView(newView);
+    saveNavigationSession(
+      { role: "professor", view: newView, courseId: selectedCourseId },
+      { pushHistory: true }
+    );
+  };
+
+  const handleCourseSelect = (courseId: string) => {
+    setSelectedCourseId(courseId);
+    saveNavigationSession(
+      { role: "professor", view, courseId },
+      { pushHistory: true }
+    );
+  };
 
   const handleCourseChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
@@ -276,10 +329,10 @@ export function ProfessorDashboard({ onLogout }: ProfessorDashboardProps) {
       {/* Sidebar Component */}
       <Sidebar
         view={view}
-        setView={setView}
+        setView={handleViewChange}
         courses={courses}
         selectedCourseId={selectedCourseId}
-        setSelectedCourseId={setSelectedCourseId}
+        setSelectedCourseId={handleCourseSelect}
         setIsAddingCourse={setIsAddingCourse}
         sidebarOpen={sidebarOpen}
         setSidebarOpen={setSidebarOpen}

@@ -13,6 +13,11 @@ import { Course, Lecture, LectureContent as LectureContentType } from '../types'
 import { getCourses, getLectures, getLectureContent } from '../lib/api';
 import { lectureToPlainText } from '../lib/lecture-text';
 import {
+  getNavigationSession,
+  saveNavigationSession,
+  onNavigationSessionChange,
+} from '../lib/navigation-state';
+import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
@@ -24,26 +29,33 @@ interface StudentDashboardProps {
 }
 
 export function StudentDashboard({ onLogout }: StudentDashboardProps) {
+  const initialSession = getNavigationSession();
   const [courses, setCourses] = useState<Course[]>([]);
   const [lectures, setLectures] = useState<Record<string, Lecture[]>>({});
   const [lectureContents, setLectureContents] = useState<Record<string, LectureContentType>>({});
-  const [selectedCourse, setSelectedCourse] = useState<string | null>(null);
-  const [selectedLecture, setSelectedLecture] = useState<string | null>(null);
-  const [currentMode, setCurrentMode] = useState<'lectures' | 'planning' | 'projects'>('lectures');
-  const [qnaDialogOpen, setQnaDialogOpen] = useState(false);
-  const [doubtsDialogOpen, setDoubtsDialogOpen] = useState(false);
+  const [selectedCourse, setSelectedCourse] = useState<string | null>(initialSession.courseId || null);
+  const [selectedLecture, setSelectedLecture] = useState<string | null>(initialSession.lectureId || null);
+  const [currentMode, setCurrentMode] = useState<'lectures' | 'planning' | 'projects'>(
+    initialSession.mode || 'lectures'
+  );
+  const [qnaDialogOpen, setQnaDialogOpen] = useState(initialSession.dialog === 'qna');
+  const [doubtsDialogOpen, setDoubtsDialogOpen] = useState(initialSession.dialog === 'doubts');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // Load courses on mount
+  // Load courses on mount and restore preserved course
   useEffect(() => {
     async function loadData() {
       try {
         const coursesData = await getCourses();
         setCourses(coursesData);
         if (coursesData.length > 0) {
-          setSelectedCourse(coursesData[0].id);
+          const session = getNavigationSession();
+          const targetCourseId = session.courseId || selectedCourse;
+          const matchedCourse = coursesData.find((c) => c.id === targetCourseId);
+          const chosenCourseId = matchedCourse ? matchedCourse.id : coursesData[0].id;
+          setSelectedCourse(chosenCourseId);
         }
       } catch (error) {
         console.error('Error loading courses:', error);
@@ -54,7 +66,7 @@ export function StudentDashboard({ onLogout }: StudentDashboardProps) {
     loadData();
   }, []);
 
-  // Load lectures when course changes
+  // Load lectures when course changes and restore preserved lecture
   useEffect(() => {
     async function loadLectures() {
       if (!selectedCourse) return;
@@ -63,9 +75,13 @@ export function StudentDashboard({ onLogout }: StudentDashboardProps) {
         const lecturesData = await getLectures(selectedCourse);
         setLectures(prev => ({ ...prev, [selectedCourse]: lecturesData }));
         
-        // Auto-select first lecture
+        // Select lecture: honor saved lecture if part of this course, else first lecture
         if (lecturesData.length > 0 && currentMode === 'lectures') {
-          setSelectedLecture(lecturesData[0].id);
+          const session = getNavigationSession();
+          const targetLectureId = session.lectureId || selectedLecture;
+          const matchedLecture = lecturesData.find((l) => l.id === targetLectureId);
+          const chosenLectureId = matchedLecture ? matchedLecture.id : lecturesData[0].id;
+          setSelectedLecture(chosenLectureId);
         }
       } catch (error) {
         console.error('Error loading lectures:', error);
@@ -74,6 +90,62 @@ export function StudentDashboard({ onLogout }: StudentDashboardProps) {
     
     loadLectures();
   }, [selectedCourse, currentMode]);
+
+  // Sync state changes with session and URL
+  useEffect(() => {
+    if (!loading && selectedCourse) {
+      saveNavigationSession({
+        role: 'student',
+        mode: currentMode,
+        courseId: selectedCourse,
+        lectureId: selectedLecture,
+        dialog: qnaDialogOpen ? 'qna' : doubtsDialogOpen ? 'doubts' : null,
+      });
+    }
+  }, [loading, currentMode, selectedCourse, selectedLecture, qnaDialogOpen, doubtsDialogOpen]);
+
+  // Keep state in sync when user navigates using browser Back/Forward
+  useEffect(() => {
+    return onNavigationSessionChange((session) => {
+      if (session.mode && session.mode !== currentMode) {
+        setCurrentMode(session.mode);
+      }
+      if (session.courseId && session.courseId !== selectedCourse) {
+        setSelectedCourse(session.courseId);
+      }
+      if (session.lectureId && session.lectureId !== selectedLecture) {
+        setSelectedLecture(session.lectureId);
+      }
+      if (session.dialog !== undefined) {
+        setQnaDialogOpen(session.dialog === 'qna');
+        setDoubtsDialogOpen(session.dialog === 'doubts');
+      }
+    });
+  }, [currentMode, selectedCourse, selectedLecture]);
+
+  const handleModeChange = (mode: 'lectures' | 'planning' | 'projects') => {
+    setCurrentMode(mode);
+    saveNavigationSession(
+      { role: 'student', mode, courseId: selectedCourse, lectureId: selectedLecture },
+      { pushHistory: true }
+    );
+  };
+
+  const handleCourseSelect = (courseId: string) => {
+    setSelectedCourse(courseId);
+    saveNavigationSession(
+      { role: 'student', courseId, mode: currentMode },
+      { pushHistory: true }
+    );
+  };
+
+  const handleLectureSelect = (lectureId: string) => {
+    setSelectedLecture(lectureId);
+    saveNavigationSession(
+      { role: 'student', lectureId, courseId: selectedCourse, mode: currentMode },
+      { pushHistory: true }
+    );
+  };
 
   // Load lecture content when lecture changes
   useEffect(() => {
@@ -138,9 +210,9 @@ export function StudentDashboard({ onLogout }: StudentDashboardProps) {
         <Sidebar
           courses={courses}
           selectedCourse={selectedCourse}
-          onCourseSelect={setSelectedCourse}
+          onCourseSelect={handleCourseSelect}
           currentMode={currentMode}
-          onModeChange={setCurrentMode}
+          onModeChange={handleModeChange}
           onLogout={onLogout}
         />
       </div>
@@ -231,7 +303,7 @@ export function StudentDashboard({ onLogout }: StudentDashboardProps) {
             <LectureNav
               lectures={getCurrentLectures()}
               selectedLecture={selectedLecture}
-              onLectureSelect={setSelectedLecture}
+              onLectureSelect={handleLectureSelect}
             />
           </div>
         )}
