@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <a href="https://youtu.be/DzG_FQJkbAA?si=_FozVdJELSWYFovM">
+  <a href="https://youtu.be/TPCx4KhBbnI?si=N8vnqCVCB11wgG-1">
     <img src="https://img.youtube.com/vi/DzG_FQJkbAA/hqdefault.jpg" width="640" alt="Watch the Smart Scribes demo on YouTube" />
   </a>
   <br/>
@@ -24,7 +24,7 @@
 
 <div align="center">
 
-[Demo video ▶️](https://youtu.be/DzG_FQJkbAA?si=_FozVdJELSWYFovM) ·
+[Demo video ▶️](https://youtu.be/TPCx4KhBbnI?si=N8vnqCVCB11wgG-1) ·
 [Slides 📋](https://drive.google.com/file/d/1qCfUEhvyrWYzWpPNcaRTe1H38lkaIORh/view?usp=sharing) ·
 [Install guide 🛠️](https://docs.google.com/document/d/12SVAEacqcgggpBd9ZEuPtTzkk854s6yFGcVeqSDfwHc/edit?usp=drive_link)
 
